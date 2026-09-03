@@ -1,0 +1,26 @@
+# Godot cache (генерируется при импорте/экспорте)
+.godot/
+.godot/**
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Worker build artifacts (собирается PyInstaller'ом)
+v2/gui/bundled/
+v2/dist/
+v2/build/
+v2/*.spec
+v2/wg_worker.exe
+v2/WG_Vanity_v2.exe
+v2/export/
+
+# Secrets & локальные результаты (не коммитим)
+wg_keys_log.txt
+outtest/
+export/
+*token*
+*.conf
+*.keys.txt
+*.qr.png
