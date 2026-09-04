@@ -1,0 +1,47 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=4
+
+_global_script_classes=[ {
+"base": "Object",
+"class": "Style",
+"language": "GDScript",
+"path": "res://scripts/Style.gd"
+} ]
+_global_script_class_icons={
+"Style": ""
+}
+
+[application]
+
+config/name="WG Vanity 3"
+config/description="Поиск vanity-ключей WireGuard и красивых .onion v3 адресов"
+run/main_scene="res://main.tscn"
+config/icon="res://assets/icon.png"
+
+[display]
+
+window/size/width=1240
+window/size/height=860
+window/size/test_width=1240
+window/size/test_height=860
+window/dpi/allow_hidpi=true
+window/vsync/use_vsync=false
+
+[gui]
+
+theme/default_font_antialiased=true
+theme/default_font_subpixel_positioning=1
+
+[rendering]
+
+quality/driver/driver_name="GLES2"
+quality/2d/msaa/2d/quality=2
+quality/2d/shadow_atlas/size=2048
+environment/defaults/default_clear_color=Color( 0.024, 0.031, 0.055, 1 )

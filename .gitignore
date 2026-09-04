@@ -15,6 +15,14 @@ v2/*.spec
 v2/wg_worker.exe
 v2/WG_Vanity_v2.exe
 v2/export/
+v3/gui/bundled/
+v3/dist/
+v3/build/
+v3/*.spec
+v3/wg_worker.exe
+v3/WG_Vanity_v3.exe
+v3/export/
+v3/rcedit-x64.exe
 
 # Secrets & локальные результаты (не коммитим)
 wg_keys_log.txt

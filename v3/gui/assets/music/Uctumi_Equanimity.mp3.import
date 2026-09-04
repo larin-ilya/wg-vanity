@@ -1,0 +1,15 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+path="res://.import/Uctumi_Equanimity.mp3-b0d6ff2070666d8b9bfc38b9e2daef2e.mp3str"
+
+[deps]
+
+source_file="res://assets/music/Uctumi_Equanimity.mp3"
+dest_files=[ "res://.import/Uctumi_Equanimity.mp3-b0d6ff2070666d8b9bfc38b9e2daef2e.mp3str" ]
+
+[params]
+
+loop=true
+loop_offset=0
