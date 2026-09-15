@@ -131,9 +131,10 @@ func _detect_env() -> void:
 	# Портрет: на Android всегда, либо окно выше своей ширины, либо принудительно
 	# через WG_VANITY_PORTRAIT=1 (это нужно, чтобы проверять вёрстку на десктопе).
 	var vsize = get_viewport().get_visible_rect().size
-	_portrait = OS.get_name() == "Android" \
-			or OS.get_environment("WG_VANITY_PORTRAIT") == "1" \
-			or vsize.y > vsize.x
+	# Портрет определяется ОРИЕНТАЦИЕЙ ЭКРАНА, а не платформой: манифест Android
+	# может оставить горизонтальную ориентацию, и тогда портретная вёрстка
+	# растянет интерфейс по ширине (проверено на телефоне).
+	_portrait = vsize.y > vsize.x or OS.get_environment("WG_VANITY_PORTRAIT") == "1"
 	_shot_file = OS.get_environment("WG_VANITY_SHOT_FILE")
 	var sd = OS.get_environment("WG_VANITY_SHOT_DELAY")
 	if sd.is_valid_integer():
