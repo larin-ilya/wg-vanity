@@ -14,6 +14,7 @@ var demo = false
 var demo_found_ms = -1.0
 var demo_stats_ms = 600.0
 var autostart = false
+var _portrait = false
 var _bridge: Node
 var _shot_file = ""
 var _shot_delay = 1500
@@ -127,6 +128,12 @@ func _detect_env() -> void:
 	if sm.is_valid_float():
 		demo_stats_ms = float(sm)
 	autostart = OS.get_environment("WG_VANITY_AUTOSTART") == "1"
+	# Портрет: на Android всегда, либо окно выше своей ширины, либо принудительно
+	# через WG_VANITY_PORTRAIT=1 (это нужно, чтобы проверять вёрстку на десктопе).
+	var vsize = get_viewport().get_visible_rect().size
+	_portrait = OS.get_name() == "Android" \
+			or OS.get_environment("WG_VANITY_PORTRAIT") == "1" \
+			or vsize.y > vsize.x
 	_shot_file = OS.get_environment("WG_VANITY_SHOT_FILE")
 	var sd = OS.get_environment("WG_VANITY_SHOT_DELAY")
 	if sd.is_valid_integer():
@@ -184,6 +191,17 @@ func _build_ui() -> void:
 	var col = VBoxContainer.new()
 	col.add_constant_override("separation", 14)
 	margins.add_child(col)
+	if _portrait:
+		# В портрете контент выше экрана — заворачиваем в прокрутку, иначе
+		# кнопка «СТАРТ» может уехать за пределы видимой области.
+		col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var sc = ScrollContainer.new()
+		sc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		sc.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		sc.add_child(col)
+		margins.add_child(sc)
+	else:
+		margins.add_child(col)
 
 	col.add_child(_build_header())
 	_flog("build:header_done")
@@ -220,7 +238,7 @@ func _build_header() -> Control:
 	var tt = VBoxContainer.new()
 	var t1 = Style.label("WG VANITY", 30, Style.TXT, false, true, true)
 	tt.add_child(t1)
-	var t2 = Style.label("подбор красивых WireGuard-ключей и .onion-адресов", 13, Style.DIM)
+	var t2 = Style.label("WireGuard-ключи и .onion-адреса" if _portrait else "подбор красивых WireGuard-ключей и .onion-адресов", 13, Style.DIM)
 	tt.add_child(t2)
 	hb.add_child(tt)
 	hb.add_child(_hspacer())
@@ -233,11 +251,12 @@ func _build_header() -> Control:
 	var mrow = HBoxContainer.new()
 	mrow.add_constant_override("separation", 6)
 	mrow.alignment = BoxContainer.ALIGN_END
-	_music_btn = Style.button("🔊 музыка", 11, false)
+	_music_btn = Style.button("🔊" if _portrait else "🔊 музыка", 11, false)
 	_music_btn.rect_min_size = Vector2(0, 0)
 	_music_btn.connect("pressed", self, "_on_music_toggle")
 	mrow.add_child(_music_btn)
-	mrow.add_child(Style.label("WireGuard · Curve25519 · .onion ed25519 · многопоточный поиск", 11, Style.FAINT))
+	if not _portrait:
+		mrow.add_child(Style.label("WireGuard · Curve25519 · .onion ed25519 · многопоточный поиск", 11, Style.FAINT))
 	right.add_child(mrow)
 	hb.add_child(right)
 	return hb
@@ -273,16 +292,16 @@ func _card_panel(vb: VBoxContainer) -> Control:
 	return p as Control
 
 func _build_mid() -> Control:
-	var mid = HBoxContainer.new()
+	var mid = VBoxContainer.new() if _portrait else HBoxContainer.new()
 	mid.add_constant_override("separation", 16)
 	mid.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 	# --- левая колонка: параметры
 	var left = VBoxContainer.new()
-	left.rect_min_size = Vector2(452, 0)
+	left.rect_min_size = Vector2(0, 0) if _portrait else Vector2(452, 0)
 	left.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	left.add_constant_override("separation", 12)
-	mid.add_child(left)
+	# в портрете порядок другой: сначала блок запуска (см. ниже)
 	_params_root = left
 
 	var pc = _card("Параметры поиска")
@@ -291,7 +310,7 @@ func _build_mid() -> Control:
 	pc.add_child(Style.label("Тип поиска", 13, Style.DIM, true))
 	seg_type = load("res://scripts/Segmented.gd").new()
 	pc.add_child(seg_type)
-	seg_type.set_options(["WireGuard-ключ", ".onion адрес"])
+	seg_type.set_options(["WireGuard", ".onion"] if _portrait else ["WireGuard-ключ", ".onion адрес"])
 	seg_type.connect("changed", self, "_on_kind_changed")
 
 	pc.add_child(Style.label("Слово / префикс", 13, Style.DIM, true))
@@ -321,7 +340,7 @@ func _build_mid() -> Control:
 	pc.add_child(Style.label("Режим подстановок", 13, Style.DIM, true))
 	seg_mode = load("res://scripts/Segmented.gd").new()
 	pc.add_child(seg_mode)
-	seg_mode.set_options(["Обычный — с заменами", "Строгий — точное слово"])
+	seg_mode.set_options(["Обычный", "Строгий"] if _portrait else ["Обычный — с заменами", "Строгий — точное слово"])
 	seg_mode.connect("changed", self, "_on_mode_changed")
 
 	var wrow = HBoxContainer.new()
@@ -380,26 +399,33 @@ func _build_mid() -> Control:
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	right.add_constant_override("separation", 12)
-	mid.add_child(right)
+	if _portrait:
+		# Мобильный порядок: кнопка запуска сразу под шапкой, настройки ниже.
+		# Иначе на телефоне кольцо «СТАРТ» уезжает за нижний край экрана.
+		mid.add_child(right)
+		mid.add_child(left)
+	else:
+		mid.add_child(left)
+		mid.add_child(right)
 
 	var runc = _card("Запуск поиска")
 	var runc_panel = _card_panel(runc)
 	runc_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	right.add_child(runc_panel)
 
-	var body = HBoxContainer.new()
+	var body = VBoxContainer.new() if _portrait else HBoxContainer.new()
 	body.add_constant_override("separation", 18)
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	runc.add_child(body)
 
 	var ringcol = VBoxContainer.new()
-	ringcol.rect_min_size = Vector2(236, 0)
+	ringcol.rect_min_size = Vector2(0, 0) if _portrait else Vector2(236, 0)
 	ringcol.alignment = BoxContainer.ALIGN_CENTER
 	ringcol.add_constant_override("separation", 12)
 	body.add_child(ringcol)
 
 	ring = load("res://scripts/RingButton.gd").new()
-	ring.rect_min_size = Vector2(148, 148)
+	ring.rect_min_size = Vector2(220, 220) if _portrait else Vector2(148, 148)
 	ring.connect("pressed", self, "_on_ring_pressed")
 	ringcol.add_child(ring)
 	state_title = Style.label("ГОТОВ К ПОИСКУ", 19, Style.TXT, true)
@@ -408,7 +434,7 @@ func _build_mid() -> Control:
 	state_sub = Style.label("введите слово и нажмите кольцо", 12, Style.DIM)
 	state_sub.align = Label.ALIGN_CENTER
 	state_sub.autowrap = true
-	state_sub.rect_min_size = Vector2(216, 0)
+	state_sub.rect_min_size = Vector2(0, 0) if _portrait else Vector2(216, 0)
 	ringcol.add_child(state_sub)
 
 	var stcol = VBoxContainer.new()

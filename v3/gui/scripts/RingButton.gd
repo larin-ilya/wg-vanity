@@ -113,11 +113,26 @@ func set_text(t: String) -> void:
 	if _lbl != null:
 		_lbl.text = t
 
+var _last_press_ms = 0
+
+func _touch_press() -> void:
+	# На Android тап приходит и как InputEventScreenTouch, и (через эмуляцию
+	# мыши) как InputEventMouseButton — гасим второе срабатывание.
+	var now = OS.get_ticks_msec()
+	if now - _last_press_ms < 250:
+		return
+	_last_press_ms = now
+	modulate = Color(0.92, 0.96, 1.0, 1.0)
+	emit_signal("pressed")
+
 func _gui_input(ev: InputEvent) -> void:
-	if ev is InputEventMouseButton and ev.button_index == BUTTON_LEFT:
+	# Мышь, палец и эмуляция мыши из тача — всё должно нажимать кольцо.
+	if ev is InputEventMouseButton:
+		if ev.button_index == BUTTON_LEFT and ev.pressed:
+			_touch_press()
+	elif ev is InputEventScreenTouch:
 		if ev.pressed:
-			modulate = Color(0.92, 0.96, 1.0, 1.0)
-			emit_signal("pressed")
+			_touch_press()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_MOUSE_ENTER:

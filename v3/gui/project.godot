@@ -33,6 +33,7 @@ window/size/test_width=1240
 window/size/test_height=860
 window/dpi/allow_hidpi=true
 window/vsync/use_vsync=false
+window/handheld/orientation=1
 
 [gui]
 
