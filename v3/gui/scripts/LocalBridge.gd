@@ -131,7 +131,7 @@ func _start(msg: Dictionary) -> void:
 	if rc != 0:
 		_emit_error("init вернул %d" % rc)
 		return
-	rc = _engine.set_prefixes(kind_id, prefixes)
+	rc = _engine.set_prefixes(kind_id, PoolStringArray(prefixes))
 	if rc != 0:
 		_emit_error("недопустимый префикс (%d)" % rc)
 		return
@@ -224,7 +224,7 @@ func _thread_loop(ctx: Dictionary) -> void:
 		qr_b64 = res[1]
 	var out := {
 		"type": "found", "search_id": ctx.search_id, "kind": ctx.kind,
-		"prefix": str(found_res.get("prefix", "")),
+		"prefix": str(ctx.word),
 		"checked": checked, "elapsed": round(elapsed * 100.0) / 100.0,
 		"worker_id": 1, "files": files, "qr_png_b64": qr_b64,
 		"engine": "native",
@@ -271,7 +271,7 @@ func _save_result(ctx: Dictionary, r, elapsed: float, checked: int) -> Array:
 	# QR на Android не строится (нет QR-энкодера в GDScript) — GUI просто не
 	# покажет картинку, сами ключи сохраняются и копируются.
 	var dpath = _out_dir(ctx)
-	var prefix = str(r.get("prefix", ""))
+	var prefix = str(ctx.word)
 	var ts = _stamp()
 	var files := []
 	if ctx.kind == "onion":
