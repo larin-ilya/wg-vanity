@@ -1271,7 +1271,7 @@ func _spawn_bridge() -> void:
 		_flog("spawn:local_bridge")
 		_bridge.launch("")
 		return
-	var exe = OS.get_environment("WG_VANITY_WORKER")	var exe = OS.get_environment("WG_VANITY_WORKER")
+	var exe = OS.get_environment("WG_VANITY_WORKER")
 	if exe == "" or not File.new().file_exists(exe):
 		exe = _resolve_worker_path()
 	if exe == "":
