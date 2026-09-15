@@ -1259,7 +1259,19 @@ func _worker_exe_name() -> String:
 	return "wg_worker"
 
 func _spawn_bridge() -> void:
-	var exe = OS.get_environment("WG_VANITY_WORKER")
+	if OS.get_name() == "Android":
+		# На Android внешний процесс запустить нельзя (нет OS.execute, W^X):
+		# поиск идёт внутри приложения через GDNative (см. LocalBridge.gd).
+		_bridge = load("res://scripts/LocalBridge.gd").new()
+		add_child(_bridge)
+		_bridge.connect("message", self, "_on_worker_message")
+		_bridge.connect("failed", self, "_on_worker_failed")
+		_bridge.connect("connected", self, "_on_worker_connected")
+		_log("▶ Локальный движок (Android)…", Style.FAINT)
+		_flog("spawn:local_bridge")
+		_bridge.launch("")
+		return
+	var exe = OS.get_environment("WG_VANITY_WORKER")	var exe = OS.get_environment("WG_VANITY_WORKER")
 	if exe == "" or not File.new().file_exists(exe):
 		exe = _resolve_worker_path()
 	if exe == "":

@@ -233,3 +233,49 @@ v3/
 ## 🔒 Лицензия
 
 MIT. См. [LICENSE](../LICENSE).
+
+---
+
+## 🤖 Android (beta)
+
+Сборка APK для `arm64-v8a` + `armeabi-v7a` (x86/x86_64 не собираются).
+
+На Android приложение не может запускать внешний воркер (`OS.execute` в Godot 3
+на Android не реализован, а с Android 10 запрещён запуск кода из каталога
+данных приложения), поэтому поиск идёт **внутри приложения**: тот же C-движок
+собран как GDNative-библиотека (`libvanity_gdnative.so`), а `LocalBridge.gd`
+повторяет интерфейс `WorkerBridge.gd` (сигналы `connected`/`message`/`failed`),
+так что `Main.gd` не знает, кто за ним стоит. Поиск идёт в одном фоновом потоке:
+C-движок держит состояние в глобальных `static` и не потокобезопасен.
+
+### Сборка
+
+```powershell
+# 1) движок под Android (2 ABI)
+./core/vanity_native/build.ps1 -Target android-arm64     # -> bin/libvanity_gdnative.so (aarch64)
+./core/vanity_native/build.ps1 -Target android-armv7     # -> bin/libvanity_gdnative.so (armv7)
+
+# 2) разложить по проекту
+#    gui/android/arm64-v8a/libvanity_gdnative.so
+#    gui/android/armeabi-v7a/libvanity_gdnative.so
+
+# 3) APK (нужны Godot 3.6.3 + Android SDK/JDK/keystore; путь к папке Android —
+#    в переменной WG_VANITY_ANDROID_DIR, по умолчанию D:\AI_PROJEKTZ\Android)
+./do_export_android.ps1      # -> export/android/WG_Vanity_v3.apk (debug-подпись)
+```
+
+`do_export_android.ps1` делает `--export-debug` (release-экспорт потребовал бы
+release-keystore, которого в комплекте нет), а затем `repack_apk.py`
+переносит GDNative-библиотеки из `assets/android/<abi>/` в `lib/<abi>/` APK —
+иначе Android их не найдёт при `dlopen` — и переподписывает APK.
+
+### Ограничения этой сборки
+
+* APK подписан **debug-ключом** (`androiddebugkey`) — для публикации нужен свой.
+* QR-код в результатах на Android не строится (нет QR-энкодера в GDScript);
+  ключи и `.conf` сохраняются и копируются, картинка просто не показывается.
+* ARMv7-библиотека собрана триплетом `arm-linux-gnueabi` (EABI5 + soft-float —
+  это и есть ABI `armeabi-v7a`): цель `arm-linux-android` роняет clang 18
+  при оптимизациях выше `-O0`. Android-специфичных зависимостей у библиотеки
+  нет (`DT_NEEDED` пуст), поэтому загрузчик её принимает.
+* На реальном устройстве сборка не проверялась (нет устройства/эмулятора в SDK).

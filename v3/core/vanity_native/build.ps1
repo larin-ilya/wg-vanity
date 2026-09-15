@@ -53,7 +53,8 @@
 
 param(
     [ValidateSet("windows", "linux", "linux-x86_64", "linux-aarch64",
-                 "linux-armv7", "x86_64", "aarch64", "armv7", "linux-arm")]
+                 "linux-armv7", "x86_64", "aarch64", "armv7", "linux-arm",
+                 "android-arm64", "android-armv7", "windows-gdnative")]
     [string]$Target = "windows"
 )
 
@@ -65,6 +66,8 @@ $bin  = Join-Path $root "bin"
 # ------------------------------------------------------------- target table
 # $mcpu is $null for targets that do not need one (all of them except ARMv7).
 $mcpu = $null
+$gdnative = $false
+$artifact = $null
 switch ($Target) {
     "windows"       { $trip = "x86_64-windows-gnu" ; $out = "vanity_core.dll"          ; $key = "windows"       }
     "linux"         { $trip = "x86_64-linux-gnu"   ; $out = "libvanity_core.so"        ; $key = "linux"         }
@@ -75,8 +78,17 @@ switch ($Target) {
     "linux-armv7"   { $trip = "arm-linux-gnueabihf"; $out = "libvanity_core-armv7.so"  ; $key = "linux-armv7"; $mcpu = "cortex_a8" }
     "armv7"         { $trip = "arm-linux-gnueabihf"; $out = "libvanity_core-armv7.so"  ; $key = "linux-armv7"; $mcpu = "cortex_a8" }
     "linux-arm"     { $trip = "arm-linux-gnueabihf"; $out = "libvanity_core-armv7.so"  ; $key = "linux-armv7"; $mcpu = "cortex_a8" }
+    # --- GDNative: Android (2 ABI) + десктопная сборка для теста -------------
+    # Одна библиотека на ABI: движок + GDNative-обёртка; кладём сразу в проект
+    # Godot (res://android/<abi>/ -> lib/<abi>/ внутри APK).
+    # android-armv7 собирается триплетом arm-linux-gnueabi (EABI5 + soft-float,
+    # это и есть ABI armeabi-v7a): цель arm-linux-android роняет clang 18 при
+    # оптимизациях выше -O0, а gnueabi собирает тот же код при -O ReleaseFast.
+    "android-arm64"    { $trip = "aarch64-linux-android"; $key = "android-arm64"; $gdnative = $true; $artifact = [IO.Path]::GetFullPath((Join-Path $root "..\..\gui\android\arm64-v8a\libvanity_gdnative.so")) }
+    "android-armv7"    { $trip = "arm-linux-gnueabi"; $key = "android-armv7"; $gdnative = $true; $mcpu = "cortex_a8"; $artifact = [IO.Path]::GetFullPath((Join-Path $root "..\..\gui\android\armeabi-v7a\libvanity_gdnative.so")) }
+    "windows-gdnative" { $trip = "x86_64-windows-gnu"; $key = "windows-gdnative"; $gdnative = $true; $artifact = [IO.Path]::GetFullPath((Join-Path $root "..\..\gui\android\windows-x86_64\libvanity_gdnative.dll")) }
 }
-$artifact = Join-Path $bin $out
+if (-not $artifact) { $artifact = Join-Path $bin $out }
 
 # ---------------------------------------------------------------- toolchain
 $py = $null
@@ -101,18 +113,27 @@ $sources = @(
     (Join-Path $root "vendor\keccak.c")
     (Join-Path $root "vendor\base32_to.c")
 )
+if ($gdnative) {
+    $sources += (Join-Path $root "gdnative\vanity_gdnative.c")
+}
 foreach ($s in $sources) {
     if (-not (Test-Path $s)) { throw "missing source file: $s" }
 }
 
+$libName = if ($gdnative) { "vanity_gdnative" } else { "vanity_core" }
 $includeDirs = @(
     (Join-Path $root "include")          # string.h / stdlib.h / sys/param.h / sodium/*
     (Join-Path $root "vendor")           # keccak.h / base32.h / types.h / likely.h
     (Join-Path $root "vendor\ed25519")   # ed25519_impl_pre.h + ed25519-donna/
     $root                                # vanity_crypto.h
 )
+if ($gdnative) {
+    $includeDirs += (Join-Path $root "gdnative")
+    $includeDirs += (Join-Path $root "gdnative\godot_headers")
+}
 
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
+New-Item -ItemType Directory -Force -Path (Split-Path $artifact -Parent) | Out-Null
 # The Windows cache paths are left exactly as they were (.zig-cache /
 # .zig-global-cache); every other target gets its own pair so a Linux build can
 # never invalidate the shipped Windows one.
@@ -137,7 +158,7 @@ foreach ($inc in $includeDirs) { $zigArgs += @("-I", $inc) }
 $zigArgs += @(
     "--cache-dir", $cacheDir,
     "--global-cache-dir", $globalCacheDir,
-    "--name", "vanity_core",
+    "--name", $libName,
     "-femit-bin=$artifact"          # "=" is required, see the header comment
 )
 

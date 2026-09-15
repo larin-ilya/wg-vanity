@@ -51,6 +51,15 @@ v3/core/vanity_native/bin/*.exp
 v3/core/vanity_native/bin/*.so.o
 v3/core/vanity_native/bin/*.a
 
+# GDNative-обёртка (Android): заголовки godotengine/godot-headers, ветка 3.6.
+# Чужой код — НЕ коммитим; build.ps1 собирает без них только движок, а цели
+# android-*/windows-gdnative требуют этих заголовков. Как получить:
+#   git clone --depth 1 --branch 3.6 \
+#       https://github.com/godotengine/godot-headers.git \
+#       v3/core/vanity_native/gdnative/godot_headers
+# (собрано против коммита 10b5e310edb493de6fcd302a6c27baedec880193)
+v3/core/vanity_native/gdnative/godot_headers/
+
 # Локальные черновики/пробы (временные каталоги внутри репозитория)
 .openclaw/
 
@@ -66,3 +75,4 @@ export/
 *.conf
 *.keys.txt
 *.qr.png
+v3/export_log_android.txt

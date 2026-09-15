@@ -42,6 +42,7 @@ theme/default_font_subpixel_positioning=1
 [rendering]
 
 quality/driver/driver_name="GLES2"
+vram_compression/import_etc=true
 quality/2d/msaa/2d/quality=2
 quality/2d/shadow_atlas/size=2048
 environment/defaults/default_clear_color=Color( 0.024, 0.031, 0.055, 1 )
