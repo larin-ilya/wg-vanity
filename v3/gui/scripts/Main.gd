@@ -1250,12 +1250,20 @@ func _on_music_toggle() -> void:
 	_save_settings()
 
 # --- вычислитель ------------------------------------------------------------
+# Имя бинарника воркера платформенное: на Windows — wg_worker.exe (как было),
+# на Linux/macOS — wg_worker (без расширения). Протокол и всё остальное не
+# зависит от платформы.
+func _worker_exe_name() -> String:
+	if OS.get_name() == "Windows":
+		return "wg_worker.exe"
+	return "wg_worker"
+
 func _spawn_bridge() -> void:
 	var exe = OS.get_environment("WG_VANITY_WORKER")
 	if exe == "" or not File.new().file_exists(exe):
 		exe = _resolve_worker_path()
 	if exe == "":
-		_log("⛔ Вычислитель не найден. Укажите WG_VANITY_WORKER или соберите bundled/wg_worker.exe", Style.DANGER)
+		_log("⛔ Вычислитель не найден. Укажите WG_VANITY_WORKER или положите %s рядом с программой" % _worker_exe_name(), Style.DANGER)
 		return
 	_bridge = load("res://scripts/WorkerBridge.gd").new()
 	add_child(_bridge)
@@ -1268,18 +1276,18 @@ func _spawn_bridge() -> void:
 	_flog("spawn:launch_called pid=%d" % _bridge.get_pid())
 
 func _resolve_worker_path() -> String:
-	var sidecar = exe_dir + "/wg_worker.exe"
+	var sidecar = exe_dir + "/" + _worker_exe_name()
 	if File.new().file_exists(sidecar):
 		return sidecar
 	return _extract_embedded_worker()
 
 func _extract_embedded_worker() -> String:
-	var res = "res://bundled/wg_worker.exe"
+	var res = "res://bundled/" + _worker_exe_name()
 	if not File.new().file_exists(res):
 		return ""
 	var dir = OS.get_user_data_dir() + "/wgv_" + str(OS.get_unix_time())
 	Directory.new().make_dir_recursive(dir)
-	var target = dir + "/wg_worker.exe"
+	var target = dir + "/" + _worker_exe_name()
 	var f = File.new()
 	if f.open(res, File.READ) != OK:
 		return ""
@@ -1290,6 +1298,13 @@ func _extract_embedded_worker() -> String:
 		return ""
 	w.store_buffer(bytes)
 	w.close()
+	# На Windows PE-бинарник запускается как есть; на Linux/Unix у только что
+	# записанного файла нет бита выполнения (Godot 3 его не выставляет), без
+	# chmod OS.execute() откажется его запускать. Godot 3.6 не умеет chmod сам,
+	# поэтому зовём системный /bin/chmod. Если его нет — просто пробуем запуск:
+	# ошибку покажет уже сам launch().
+	if OS.get_name() != "Windows":
+		OS.execute("chmod", ["+x", target], true)
 	return target
 
 func _on_worker_connected() -> void:

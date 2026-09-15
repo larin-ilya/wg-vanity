@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 ctypes-обёртка над нативным движком двух видов vanity-поиска
-(vanity_native/bin/vanity_core.dll):
+(vanity_native/bin/vanity_core.dll под Windows, libvanity_core.so под Linux —
+имя выбирается по платформе, см. LIBRARY_NAMES):
 
   * kind="onion" — красивые Tor v3 .onion-адреса (ed25519, base32 a-z2-7);
   * kind="wg"    — красивые WireGuard-ключи (X25519, base64 A-Za-z0-9+/).
@@ -14,33 +15,65 @@ vanity_native/vanity_bridge.c, см. также vanity_native/build.ps1 и
 vanity_native/vendor/UPSTREAM.txt.
 
 Особенности:
-  * DLL линкуется БЕЗ libc, поэтому она не выделяет память и не пишет файлы —
-    найденный ключ возвращается в аргументах вызова;
+  * модуль линкуется БЕЗ libc (и без единой DT_NEEDED-зависимости под Linux),
+    поэтому он не выделяет память и не пишет файлы — найденный ключ
+    возвращается в аргументах вызова;
   * энтропия попадает внутрь ровно один раз: os.urandom(48) через
     vanity_init(), дальше работает внутренний ChaCha20-DRBG;
   * base64-строку для WireGuard формирует Python (в C только сырые 32 байта);
-  * модуль НЕ потокобезопасен (у DLL одно глобальное состояние). Параллелизм в
+  * модуль НЕ потокобезопасен (у него одно глобальное состояние). Параллелизм в
     проекте — через multiprocessing, по одному движку на процесс; на всякий
     случай вызовы сериализованы threading.Lock'ом.
 
 Выбор движка (переменные окружения, приоритет сверху вниз):
 
   1. WG_NATIVE_ENGINE=auto|native|python — общий переключатель для ОБОИХ видов
-     поиска (по умолчанию auto: native, если DLL есть, иначе python);
+     поиска (по умолчанию auto: native, если библиотека есть, иначе python);
   2. WG_ONION_ENGINE=auto|native|python — старый переключатель, продолжает
      работать и учитывается только для kind="onion" (обратная совместимость);
   3. иначе auto.
 
-Если DLL недоступна (не собрана / другая платформа), is_available() вернёт
-False, а configure()/search() — понятную ошибку; падения не будет.
+Если библиотека недоступна (не собрана / другая платформа), is_available()
+вернёт False, а configure()/search() — понятную ошибку; падения не будет.
 """
 import base64
 import ctypes
 import os
+import platform
 import sys
 import threading
 
-DLL_NAME = "vanity_core.dll"
+
+# --------------------------------------------------------------------------
+# Имя библиотеки: платформенно
+# --------------------------------------------------------------------------
+# Один и тот же C-код собирается в PE-DLL под Windows и в разделяемый объект
+# (.so) под Linux — см. vanity_native/build.ps1 (там же параметр -Target).
+# Различается только имя файла:
+#
+#   Windows x86_64       vanity_core.dll                (как и было)
+#   Linux   x86_64       libvanity_core.so
+#   Linux   aarch64      libvanity_core-aarch64.so
+#   Linux   armv7/armhf  libvanity_core-armv7.so
+#
+# ARM-имена идут первыми, но общий libvanity_core.so принимается как запасной
+# вариант — его можно просто положить рядом вручную.
+def _library_names():
+    machine = (platform.machine() or "").lower()
+    if sys.platform.startswith("win"):
+        return ["vanity_core.dll"]
+    if machine in ("aarch64", "arm64"):
+        return ["libvanity_core-aarch64.so", "libvanity_core.so"]
+    # 32-битный ARM: armv7l / armv6l / armhf. Движок кросс-собран под ARMv7-A
+    # (cortex_a8), т.е. для Raspberry Pi 2 и новее.
+    if machine.startswith("arm"):
+        return ["libvanity_core-armv7.so", "libvanity_core.so"]
+    # прочие (x86_64, i686, ppc64le...) — общая x86_64-сборка
+    return ["libvanity_core.so"]
+
+
+LIBRARY_NAMES = _library_names()
+DLL_NAME = LIBRARY_NAMES[0]      # обратная совместимость: имя для сообщений
 DLL_SUBDIR = "vanity_native"
 
 # --------------------------------------------------------------------------
@@ -103,34 +136,43 @@ def _norm_kind(kind):
 
 
 # --------------------------------------------------------------------------
-# Поиск DLL
+# Поиск библиотеки
 # --------------------------------------------------------------------------
 def _candidate_paths():
+    """Пути, где ищется нативная библиотека (порядок — как был).
+
+    1) рядом с этим модулем:  <core>/vanity_native/bin/<lib>, затем <core>/vanity_native/<lib>
+    2) внутри PyInstaller-бандла (_MEIPASS) — там же два варианта
+    3) рядом с исполняемым файлом (--onedir, ручная раскладка)
+    Для каждой платформы перебираются все имена из LIBRARY_NAMES, поэтому
+    список получается длиннее, но порядок приоритетов не меняется."""
     here = os.path.dirname(os.path.abspath(__file__))
     exe_dir = os.path.dirname(os.path.abspath(sys.executable))
     meipass = getattr(sys, "_MEIPASS", None)
-    names = [
-        # 1) рядом с этим модулем: <core>/vanity_native/bin/vanity_core.dll
-        os.path.join(here, DLL_SUBDIR, "bin", DLL_NAME),
-        os.path.join(here, DLL_SUBDIR, DLL_NAME),
-        # 2) рядом с исполняемым файлом (--onedir, ручная раскладка)
-        os.path.join(exe_dir, DLL_NAME),
-        os.path.join(exe_dir, DLL_SUBDIR, "bin", DLL_NAME),
-    ]
-    # 3) внутри PyInstaller-бандла (--onefile распаковывает в _MEIPASS)
+
+    groups = []                        # каталоги по убыванию приоритета
     if meipass:
-        names.insert(0, os.path.join(meipass, DLL_NAME))
-        names.insert(1, os.path.join(meipass, DLL_SUBDIR, "bin", DLL_NAME))
+        # 1) внутри PyInstaller-бандла (--onefile распаковывает в _MEIPASS)
+        groups.append(meipass)
+        groups.append(os.path.join(meipass, DLL_SUBDIR, "bin"))
+    # 2) рядом с этим модулем: <core>/vanity_native/bin/, <core>/vanity_native/
+    groups.append(os.path.join(here, DLL_SUBDIR, "bin"))
+    groups.append(os.path.join(here, DLL_SUBDIR))
+    # 3) рядом с исполняемым файлом (--onedir, ручная раскладка)
+    groups.append(exe_dir)
+    groups.append(os.path.join(exe_dir, DLL_SUBDIR, "bin"))
+
     out = []
-    for p in names:
-        p = os.path.normpath(p)
-        if p not in out:
-            out.append(p)
+    for g in groups:
+        for n in LIBRARY_NAMES:
+            p = os.path.normpath(os.path.join(g, n))
+            if p not in out:
+                out.append(p)
     return out
 
 
 def find_dll():
-    """Возвращает путь к vanity_core.dll или None."""
+    """Возвращает путь к нативной библиотеке или None."""
     for p in _candidate_paths():
         try:
             if os.path.isfile(p):
@@ -172,10 +214,18 @@ class VanityNativeEngine:
             raise VanityNativeUnavailable(self._load_error)
         path = find_dll()
         if path is None:
+            if sys.platform.startswith("win"):
+                hint = ("соберите её: powershell -File "
+                        "v3/core/vanity_native/build.ps1")
+            else:
+                hint = ("готовый %s коммитится в репозиторий; пересобрать можно "
+                        "с машины сборки: powershell -File "
+                        "v3/core/vanity_native/build.ps1 -Target linux "
+                        "(или linux-aarch64 / linux-armv7)"
+                        % LIBRARY_NAMES[-1])
             self._load_error = (
-                "%s не найдена (искали: %s); "
-                "соберите её: powershell -File v3/core/vanity_native/build.ps1"
-                % (DLL_NAME, "; ".join(_candidate_paths())))
+                "%s не найдена (искали: %s); %s"
+                % (DLL_NAME, "; ".join(_candidate_paths()), hint))
             raise VanityNativeUnavailable(self._load_error)
         try:
             dll = ctypes.CDLL(path)

@@ -35,6 +35,20 @@
 
 Полная сборка из исходников v3 — см. [`v3/README.md`](v3/README.md).
 
+### Что в билде
+
+- **Нативный движок кросс-платформенный**: один и тот же C-код (mkp224o
+  `ed25519-donna`, batch-режим) собирается в `vanity_core.dll` под Windows и в
+  `libvanity_core.so` под Linux x86_64/aarch64/armv7 — `zig` кросс-компилирует
+  всё с Windows-машины, компилятор на Linux не нужен. Оба артефакта
+  закоммичены.
+- **Linux из коробки**: GUI экспортируется пресетом `Linux/X11`
+  (`v3/do_export_linux.ps1`), воркер замораживается `PyInstaller`'ом в
+  standalone-ELF (`v3/build_worker_linux.sh`, портативный CPython — sudo не
+  нужен). На целевой машине не требуется ни Python, ни pip. Подробности —
+  раздел «🐧 Linux» в [`v3/README.md`](v3/README.md).
+- Windows-сборка (`WG_Vanity_v3.exe`, вшитый `wg_worker.exe`) не изменилась.
+
 ---
 
 ## ⌨️ CLI v1 (Python)

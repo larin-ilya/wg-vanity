@@ -90,7 +90,15 @@
 #include "keccak.h"
 #include "base32.h"
 
+/* Exported entry points. On Windows the module is a PE DLL and needs
+ * __declspec(dllexport); everywhere else it is a shared object and gets the
+ * default ELF visibility attribute (which matters under -fvisibility=hidden,
+ * and is simply the default one otherwise). */
+#ifdef _WIN32
 #define VN_EXPORT __declspec(dllexport)
+#else
+#define VN_EXPORT __attribute__((visibility("default")))
+#endif
 
 /* ------------------------------------------------------------------- kinds */
 

@@ -1,7 +1,7 @@
 extends Node
-# WorkerBridge — запуск внешнего вычислителя (wg_worker.exe) и JSON-lines
-# общение с ним по локальному TCP. Worker сам выбирает порт и пишет его
-# в файл (--portfile); мы ждём файл и подключаемся.
+# WorkerBridge — запуск внешнего вычислителя (wg_worker.exe на Windows,
+# wg_worker на Linux) и JSON-lines общение с ним по локальному TCP. Worker сам
+# выбирает порт и пишет его в файл (--portfile); мы ждём файл и подключаемся.
 
 signal connected
 signal message(msg)      # Dictionary
@@ -142,17 +142,34 @@ func shutdown() -> void:
 					_pid = 0
 					break
 			if _pid > 0:
-				OS.execute("taskkill.exe", ["/PID", str(_pid), "/F", "/T"], true)
+				_kill_pid(_pid)
 	elif _pid > 0:
-		OS.execute("taskkill.exe", ["/PID", str(_pid), "/F", "/T"], true)
+		_kill_pid(_pid)
+
+# --- убийство/проверка процесса: платформенно --------------------------------
+# Windows: taskkill.exe / tasklist.exe — ровно как было.
+# Linux/macOS: у Godot 3.6 есть OS.is_process_running() и OS.kill(), внешние
+# утилиты там не нужны (и taskkill с tasklist попросту отсутствуют).
+func _kill_pid(pid: int) -> void:
+	if pid <= 0:
+		return
+	if OS.get_name() == "Windows":
+		OS.execute("taskkill.exe", ["/PID", str(pid), "/F", "/T"], true)
+	else:
+		OS.kill(pid)
 
 func _proc_alive() -> bool:
-	var out = []
-	var code = OS.execute("tasklist.exe", ["/FI", "PID eq %d" % _pid, "/NH"], true, out)
-	if code != 0:
-		return true
-	var joined = PoolStringArray(out).join(" ")
-	return joined.find(str(_pid)) != -1
+	if OS.get_name() == "Windows":
+		var out = []
+		var code = OS.execute("tasklist.exe", ["/FI", "PID eq %d" % _pid, "/NH"], true, out)
+		if code != 0:
+			return true
+		var joined = PoolStringArray(out).join(" ")
+		return joined.find(str(_pid)) != -1
+	# pid<=0 OS.is_process_running() не принимает — считаем «не жив»
+	if _pid <= 0:
+		return false
+	return OS.is_process_running(_pid)
 
 func _exit_tree() -> void:
 	# финальная страховка: если worker ещё жив — убить
@@ -162,4 +179,4 @@ func _exit_tree() -> void:
 		var txt = f.get_as_text().strip_edges()
 		f.close()
 		if txt.is_valid_integer():
-			OS.execute("taskkill.exe", ["/PID", str(txt), "/F", "/T"], true)
+			_kill_pid(int(txt))

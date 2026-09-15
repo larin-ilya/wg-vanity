@@ -26,6 +26,10 @@ v3/WG_Vanity_v3.exe
 v3/export/
 v3/rcedit-x64.exe
 v3/export_log.txt
+v3/export_log_linux.txt
+# Linux: PyInstaller-сборка воркера (build_worker_linux.sh) — build/ и *.spec
+# пишутся в рабочий каталог вне репозитория, но на всякий случай:
+v3/build_worker/
 
 # Нативный движок (onion v3 + WireGuard): кэши zig (сборочный мусор build.ps1)
 .zig-cache/
@@ -34,11 +38,21 @@ v3/export_log.txt
 *.zig-global-cache/
 v3/core/vanity_native/.zig-cache/
 v3/core/vanity_native/.zig-global-cache/
-# ...а сам bin/vanity_core.dll, наоборот, КОММИТИТСЯ (на машинах сборки нет
-# компилятора, без него релиз не воспроизвести) — см. v3/core/vanity_native/build.ps1
+# ...у не-Windows целей кэши отдельные, чтобы Linux-сборка не сбивала Windows
+# (.zig-cache-linux, .zig-cache-linux-aarch64, .zig-cache-linux-armv7, ...)
+.zig-cache-*/
+.zig-global-cache-*/
+# ...а сами bin/vanity_core.dll и bin/libvanity_core*.so, наоборот, КОММИТЯТСЯ
+# (на машинах сборки нет компилятора, без них релиз не воспроизвести) —
+# см. v3/core/vanity_native/build.ps1
 v3/core/vanity_native/bin/*.lib
 v3/core/vanity_native/bin/*.pdb
 v3/core/vanity_native/bin/*.exp
+v3/core/vanity_native/bin/*.so.o
+v3/core/vanity_native/bin/*.a
+
+# Локальные черновики/пробы (временные каталоги внутри репозитория)
+.openclaw/
 
 # Локальные черновики замеров
 v3/bench/*.json
