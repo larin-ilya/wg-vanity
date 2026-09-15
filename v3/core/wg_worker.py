@@ -25,18 +25,20 @@ Worker сам выбирает свободный порт (bind 127.0.0.1:0), �
     {"type":"ready"}                     (сразу после подключения)
     {"type":"started","search_id":1,"kind":"wg"|"onion","word":...,
      "strict":...,"workers":N,"prefix_count":K,"base64_len":L,
-     "substitutions":n}
+     "engine":"python"|"native","substitutions":n}
     {"type":"stats","search_id":1,"elapsed":s,"checked":N,"speed":n/s,
      "avg":n/s,"peak":n/s,"eta":s|null}
     Для kind="wg":
     {"type":"found","search_id":1,"kind":"wg",
      "prefix":"...","public_key":"...","private_key":"...",
      "checked":N,"elapsed":s,"worker_id":i,
+     "keys_checked":N,"engine":"python"|"native","timestamp":"...",
      "files":["имя","имя"...],"qr_png_b64":"..."|null}
     Для kind="onion":
     {"type":"found","search_id":1,"kind":"onion","prefix":"...",
      "onion":"56-символов без .onion","seed_b64":"...",
      "public_key_b64":"...","checked":N,"elapsed":s,"worker_id":i,
+     "keys_checked":N,"engine":"python"|"native","timestamp":"...",
      "files":["..."...]}
     {"type":"stopped","search_id":1,"checked":N,"elapsed":s}   (остановлено пользователем)
     {"type":"error","search_id":1|null,"message":"..."}
@@ -56,7 +58,7 @@ import time
 import traceback
 from datetime import datetime
 
-# Воркер импортирует соседний модуль onion_native.py. В обычном Python каталог
+# Воркер импортирует соседний модуль vanity_native.py. В обычном Python каталог
 # запущенного скрипта и так лежит в sys.path[0], но у embeddable-сборок
 # (python313.zip + ._pth, как у комплектного AutoClaw-Python) sys.path задаётся
 # файлом, и каталога скрипта там нет — добавляем его сами. Безопасно и для
@@ -74,14 +76,16 @@ try:
 except Exception:  # pragma: no cover
     HAVE_NACL = False
 
-# Нативный движок onion-поиска (собранный из mkp224o ed25519-donna).
-# Если DLL нет/не грузится — спокойно живём на чистом Python.
+# Нативный движок обоих видов поиска (собранный из mkp224o ed25519-donna):
+# .onion v3 через base32-фильтр и WireGuard через base64-фильтр поверх
+# Эдвардс→Монтгомери перехода. Если DLL нет/не грузится — спокойно живём на
+# чистом Python (PyNaCl).
 try:
-    import onion_native
-    ONION_NATIVE_IMPORT_ERROR = None
+    import vanity_native
+    VANITY_NATIVE_IMPORT_ERROR = None
 except Exception as _e:  # pragma: no cover
-    onion_native = None
-    ONION_NATIVE_IMPORT_ERROR = "%s: %s" % (type(_e).__name__, _e)
+    vanity_native = None
+    VANITY_NATIVE_IMPORT_ERROR = "%s: %s" % (type(_e).__name__, _e)
 
 # --------------------------------------------------------------------------
 # ДОПУСТИМЫЕ ЗАМЕНЫ СИМВОЛОВ (leet-режим) — как в v1
@@ -122,7 +126,15 @@ assert len(ONION_SECRET_MAGIC) == 32 and len(ONION_PUBLIC_MAGIC) == 32
 
 # Сколько ключей просим у нативного движка за один вызов. Меньше — отзывчивее
 # stop/найденный-другой-воркер, больше — меньше накладных расходов на вызов.
+# Размеры разные: onion-батч упирается в ed25519-donna с его base32-фильтром,
+# wg-батч — в Эдвардс→Монтгомери (+16 байт знаменателя на точку), поэтому у
+# него чанк вчетверо меньше — и тот и другой укладываются в ~0.1 с на этой
+# машине.
 ONION_NATIVE_CHUNK = 262144
+WG_NATIVE_CHUNK = 65536
+# Имена видов поиска для нативного движка (vanity_native.KIND_*).
+NATIVE_KIND_ONION = "onion"
+NATIVE_KIND_WG = "wg"
 
 # Подстановки для onion (только в рамках алфавита base32).
 # "0"->"o", "1"->"l"/"i", "8"->"b", "9"->"g" НЕЛЬЗЯ: таких символов в
@@ -198,11 +210,39 @@ def build_groups(prefixes):
 
 
 # --------------------------------------------------------------------------
-# Дочерний процесс-поисковик (только криптография + счётчик)
+# Дочерний процесс-поисковик WireGuard (только криптография + счётчик)
 # --------------------------------------------------------------------------
 def search_worker(worker_id, groups, first_bytes, stop_event, found_event,
                   counter, result_queue):
-    """Крутит пары ключей, пока не найдёт совпадение или не остановят."""
+    """Ищет WireGuard-ключи. Движок выбирается автоматически:
+
+      * native — модуль vanity_native (mkp224o ed25519-donna, batch-режим,
+        Эдвардс→Монтгомери внутри C);
+      * python — прежний чистый Python + PyNaCl (fallback).
+
+    Переключатель: WG_NATIVE_ENGINE=python|native|auto (по умолчанию auto).
+    Процесс остаётся однопоточным; параллелизм — через multiprocessing."""
+    try:
+        engine = wg_engine_for(groups)
+    except Exception as e:
+        try:
+            result_queue.put({"error": "search_worker: %s" % e})
+        except Exception:
+            pass
+        return
+    if engine == "native":
+        _search_worker_wg_native(worker_id, groups, stop_event, found_event,
+                                 counter, result_queue)
+    else:
+        _search_worker_wg_python(worker_id, groups, first_bytes, stop_event,
+                                 found_event, counter, result_queue)
+
+
+def _search_worker_wg_python(worker_id, groups, first_bytes, stop_event,
+                             found_event, counter, result_queue):
+    """Чистый Python: priv = random(32) -> crypto_scalarmult_base -> base64.
+    В десятки-сотни раз медленнее нативного пути, но работает без DLL.
+    Алгоритм намеренно не менялся — это честное «до» для замеров."""
     keys_checked = 0
     try:
         firsts = set(first_bytes)
@@ -225,6 +265,7 @@ def search_worker(worker_id, groups, first_bytes, stop_event, found_event,
                                 "prefix": prefix.decode(),
                                 "worker_id": worker_id,
                                 "keys_checked": keys_checked,
+                                "engine": "python",
                                 "timestamp": datetime.now().isoformat(
                                     timespec="seconds"),
                             })
@@ -243,7 +284,7 @@ def search_worker_onion(worker_id, groups, first_bytes, stop_event,
                         found_event, counter, result_queue):
     """Ищет onion v3. Движок выбирается автоматически:
 
-      * native — модуль onion_native (mkp224o ed25519-donna, batch-режим);
+      * native — модуль vanity_native (mkp224o ed25519-donna, batch-режим);
       * python — прежний чистый Python + PyNaCl (fallback).
 
     Переключатель: WG_ONION_ENGINE=python|native|auto (по умолчанию auto).
@@ -318,65 +359,149 @@ def all_onion_prefixes(groups):
     return sorted(out)
 
 
-def onion_engine_for(groups):
-    """Выбирает движок onion-поиска: 'native' или 'python'.
+def _native_requested(kind):
+    """Явно ли запрошен нативный движок (WG_NATIVE_ENGINE, а для onion ещё и
+    старый WG_ONION_ENGINE)? Нужно только для случая, когда модуль
+    vanity_native вообще не импортировался; приоритет переменных повторяет
+    vanity_native.engine_mode()."""
+    choice = (os.environ.get("WG_NATIVE_ENGINE") or "").strip().lower()
+    if choice not in ("python", "native", "auto"):
+        choice = ""
+    if not choice and kind == NATIVE_KIND_ONION:
+        legacy = (os.environ.get("WG_ONION_ENGINE") or "").strip().lower()
+        if legacy in ("python", "native", "auto"):
+            choice = legacy
+    return choice == "native"
+
+
+def _native_engine_for(kind, groups, max_prefix_len, env_var):
+    """Общая часть выбора движка для onion и wg.
 
     native берём, только если DLL доступна И набор префиксов ей подходит
-    (алфавит a-z2-7, длина 1..12 — столько принимает обёртка).  При
-    WG_ONION_ENGINE=native любая из этих причин — громкая ошибка, а не повод
-    молча замедлиться; в режиме auto — тихий откат на Python."""
-    if onion_native is None:
-        if os.environ.get("WG_ONION_ENGINE", "").strip().lower() == "native":
+    (алфавит и длину проверяет обёртка).  При явном
+    WG_NATIVE_ENGINE=... (или старом WG_ONION_ENGINE=native) любая из этих
+    причин — громкая ошибка, а не повод молча замедлиться; в режиме auto —
+    тихий откат на Python."""
+    if vanity_native is None:
+        if _native_requested(kind):
             raise RuntimeError(
-                "WG_ONION_ENGINE=native, но модуль onion_native не "
-                "импортируется: %s" % ONION_NATIVE_IMPORT_ERROR)
+                "%s=native, но модуль vanity_native не импортируется: %s"
+                % (env_var, VANITY_NATIVE_IMPORT_ERROR))
         return "python"
-    mode = onion_native.engine_mode()
+    mode = vanity_native.engine_mode(kind)
     if mode == "python":
         return "python"
 
     prefixes = [p.decode("ascii") for p in all_onion_prefixes(groups)]
     try:
-        onion_native.OnionNativeEngine.normalize_prefixes(prefixes)
+        vanity_native.VanityNativeEngine.normalize_prefixes(prefixes, kind)
         prefix_err = None
     except Exception as e:
         prefix_err = str(e)
-    available = onion_native.is_available()
+    available = vanity_native.is_available()
 
     if prefix_err is None and available:
         return "native"
     if mode == "native":
         if prefix_err is not None:
             raise RuntimeError(
-                "WG_ONION_ENGINE=native, но набор префиксов не подходит "
-                "нативному движку: %s" % prefix_err)
+                "%s=native, но набор префиксов не подходит нативному движку "
+                "(kind=%s, максимум %d символов): %s"
+                % (env_var, kind, max_prefix_len, prefix_err))
         raise RuntimeError(
-            "WG_ONION_ENGINE=native, но нативный движок недоступен: %s"
-            % onion_native.unavailable_reason())
+            "%s=native, но нативный движок недоступен: %s"
+            % (env_var, vanity_native.unavailable_reason()))
     return "python"
 
 
-def _match_prefix(prefixes, onion):
-    """Какой из префиксов (bytes) сработал — самый длинный."""
+def onion_engine_for(groups):
+    """Выбирает движок .onion-поиска: 'native' или 'python'."""
+    return _native_engine_for(NATIVE_KIND_ONION, groups,
+                              vanity_native.MAX_PREFIX_LEN
+                              if vanity_native else 0,
+                              "WG_NATIVE_ENGINE или WG_ONION_ENGINE")
+
+
+def wg_engine_for(groups):
+    """Выбирает движок WireGuard-поиска: 'native' или 'python'.
+
+    Нативный путь требует, чтобы все префиксы укладывались в base64-алфавит и
+    в 34 символа (как и ограничение приложения); иначе — Python."""
+    maxlen = vanity_native.MAX_WG_PREFIX_LEN if vanity_native else 0
+    return _native_engine_for(NATIVE_KIND_WG, groups, maxlen,
+                              "WG_NATIVE_ENGINE")
+
+
+def _match_prefix(prefixes, addr):
+    """Какой из префиксов (bytes) сработал — самый длинный. Работает и для
+    onion-адреса, и для base64-строки WireGuard-ключа."""
     best = None
     for p in prefixes:
         s = p.decode("ascii")
-        if onion.startswith(s) and (best is None or len(s) > len(best)):
+        if addr.startswith(s) and (best is None or len(s) > len(best)):
             best = s
-    return best if best is not None else onion[:1]
+    return best if best is not None else addr[:1]
+
+
+def _search_worker_wg_native(worker_id, groups, stop_event, found_event,
+                             counter, result_queue):
+    """Нативный WG-поиск: чанками по WG_NATIVE_CHUNK ключей.
+
+    Между чанками проверяем stop_event/found_event — процесс остаётся
+    однопоточным."""
+    keys_checked = 0
+    try:
+        prefixes = all_onion_prefixes(groups)
+        engine = vanity_native.get_engine(NATIVE_KIND_WG)
+        engine.configure([p.decode("ascii") for p in prefixes],
+                         kind=NATIVE_KIND_WG)
+        while not stop_event.is_set() and not found_event.is_set():
+            code, checked, found = engine.search(WG_NATIVE_CHUNK)
+            keys_checked += checked
+            if checked:
+                with counter.get_lock():
+                    counter.value += checked
+            if found is None:
+                if checked == 0:
+                    break        # защита от холостого цикла
+                continue
+            if not found_event.is_set():
+                found_event.set()
+                pub_b64 = base64.b64encode(found["public_key"]).decode()
+                result_queue.put({
+                    "private_key": base64.b64encode(
+                        found["private_key"]).decode(),
+                    "public_key": pub_b64,
+                    # обёртка уже выбрала самый длинный совпавший префикс;
+                    # страховка — пересобрать его из списка префиксов
+                    "prefix": found["prefix"] or _match_prefix(prefixes,
+                                                               pub_b64),
+                    "worker_id": worker_id,
+                    "keys_checked": keys_checked,
+                    "engine": "native",
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                })
+            return
+    except Exception as e:  # pragma: no cover
+        try:
+            result_queue.put({
+                "error": "search_worker (wg native): %s" % e})
+        except Exception:
+            pass
 
 
 def _search_worker_onion_native(worker_id, groups, stop_event, found_event,
                                 counter, result_queue):
-    """Нативный поиск: чанками по ONION_NATIVE_CHUNK ключей.
+    """Нативный onion-поиск: чанками по ONION_NATIVE_CHUNK ключей.
 
     Между чанками проверяем stop_event/found_event — процесс остаётся
     однопоточным, чанк на этой машине это ~0.1 с."""
     keys_checked = 0
     try:
         prefixes = all_onion_prefixes(groups)
-        engine = onion_native.get_engine()
-        engine.configure([p.decode("ascii") for p in prefixes])
+        engine = vanity_native.get_engine(NATIVE_KIND_ONION)
+        engine.configure([p.decode("ascii") for p in prefixes],
+                         kind=NATIVE_KIND_ONION)
         while not stop_event.is_set() and not found_event.is_set():
             code, checked, found = engine.search(ONION_NATIVE_CHUNK)
             keys_checked += checked
@@ -703,19 +828,21 @@ class SearchSession:
                 self.word, self.strict)
             target = search_worker_onion
             self.groups = build_groups(prefixes)
-            try:
-                engine = onion_engine_for(self.groups)
-            except Exception as e:
-                # явно запросили native, а его нет — сообщаем причину и не
-                # притворяемся, что всё хорошо
-                engine = "python"
-                engine_note = str(e)
-                traceback.print_exc()
+            engine_for = onion_engine_for
         else:
             prefixes, self.substitutions = generate_prefixes(
                 self.word, self.strict)
             target = search_worker
             self.groups = build_groups(prefixes)
+            engine_for = wg_engine_for
+        try:
+            engine = engine_for(self.groups)
+        except Exception as e:
+            # явно запросили native, а его нет — сообщаем причину и не
+            # притворяемся, что всё хорошо
+            engine = "python"
+            engine_note = str(e)
+            traceback.print_exc()
         self.prefix_count = len(prefixes)
         self.first_bytes = list(self.groups.keys())
         for i in range(self.workers):
@@ -966,6 +1093,9 @@ class WorkerServer:
                 "private_key": res["private_key"], "checked": checked,
                 "elapsed": round(elapsed, 2), "worker_id": res["worker_id"],
                 "files": files, "qr_png_b64": qr_b64,
+                "keys_checked": res.get("keys_checked"),
+                "timestamp": res.get("timestamp"),
+                "engine": res.get("engine", "python"),
             })
 
     # -- main loop --------------------------------------------------------

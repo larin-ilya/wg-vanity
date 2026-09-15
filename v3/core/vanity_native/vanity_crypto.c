@@ -1,17 +1,17 @@
-/* wg_onion_crypto.c - see wg_onion_crypto.h for the rationale.
+/* vanity_crypto.c - see vanity_crypto.h for the rationale.
  *
  * SHA-512 is a plain FIPS 180-4 implementation. ChaCha20 is RFC 8439. The DRBG
  * is ChaCha20 with a key/nonce derived from the caller-supplied entropy, plus a
  * periodic rekey so that observing a later output does not reveal earlier ones.
  */
 
-#include "wg_onion_crypto.h"
+#include "vanity_crypto.h"
 
 /* ====================================================================== */
 /* Utilities                                                              */
 /* ====================================================================== */
 
-void *wg_memcpy(void *dst, const void *src, size_t n)
+void *vn_memcpy(void *dst, const void *src, size_t n)
 {
 	unsigned char *d = (unsigned char *)dst;
 	const unsigned char *s = (const unsigned char *)src;
@@ -19,14 +19,14 @@ void *wg_memcpy(void *dst, const void *src, size_t n)
 	return dst;
 }
 
-void *wg_memset(void *dst, int c, size_t n)
+void *vn_memset(void *dst, int c, size_t n)
 {
 	unsigned char *d = (unsigned char *)dst;
 	while (n--) *d++ = (unsigned char)c;
 	return dst;
 }
 
-int wg_memcmp(const void *a, const void *b, size_t n)
+int vn_memcmp(const void *a, const void *b, size_t n)
 {
 	const unsigned char *x = (const unsigned char *)a;
 	const unsigned char *y = (const unsigned char *)b;
@@ -37,13 +37,13 @@ int wg_memcmp(const void *a, const void *b, size_t n)
 	return 0;
 }
 
-void wg_memzero(void *p, size_t len)
+void vn_memzero(void *p, size_t len)
 {
 	volatile unsigned char *v = (volatile unsigned char *)p;
 	while (len--) *v++ = 0;
 }
 
-size_t wg_strnlen(const char *s, size_t maxlen)
+size_t vn_strnlen(const char *s, size_t maxlen)
 {
 	size_t n = 0;
 	while (n < maxlen && s[n]) ++n;
@@ -138,7 +138,7 @@ static void sha512_compress(uint64_t h[8], const uint8_t block[128])
 	h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
 }
 
-void wg_sha512_init(wg_sha512_ctx *c)
+void vn_sha512_init(vn_sha512_ctx *c)
 {
 	c->h[0] = 0x6a09e667f3bcc908ULL;
 	c->h[1] = 0xbb67ae8584caa73bULL;
@@ -153,7 +153,7 @@ void wg_sha512_init(wg_sha512_ctx *c)
 	c->buflen = 0;
 }
 
-void wg_sha512_update(wg_sha512_ctx *c, const void *data, size_t len)
+void vn_sha512_update(vn_sha512_ctx *c, const void *data, size_t len)
 {
 	const uint8_t *p = (const uint8_t *)data;
 
@@ -164,7 +164,7 @@ void wg_sha512_update(wg_sha512_ctx *c, const void *data, size_t len)
 	if (c->buflen) {
 		size_t want = 128 - c->buflen;
 		if (want > len) want = len;
-		wg_memcpy(c->buf + c->buflen, p, want);
+		vn_memcpy(c->buf + c->buflen, p, want);
 		c->buflen += want;
 		p += want;
 		len -= want;
@@ -181,12 +181,12 @@ void wg_sha512_update(wg_sha512_ctx *c, const void *data, size_t len)
 	}
 
 	if (len) {
-		wg_memcpy(c->buf, p, len);
+		vn_memcpy(c->buf, p, len);
 		c->buflen = len;
 	}
 }
 
-void wg_sha512_final(wg_sha512_ctx *c, uint8_t out[64])
+void vn_sha512_final(vn_sha512_ctx *c, uint8_t out[64])
 {
 	uint64_t bits_lo, bits_hi;
 	size_t i;
@@ -197,11 +197,11 @@ void wg_sha512_final(wg_sha512_ctx *c, uint8_t out[64])
 
 	c->buf[c->buflen++] = 0x80;
 	if (c->buflen > 112) {
-		wg_memset(c->buf + c->buflen, 0, 128 - c->buflen);
+		vn_memset(c->buf + c->buflen, 0, 128 - c->buflen);
 		sha512_compress(c->h, c->buf);
 		c->buflen = 0;
 	}
-	wg_memset(c->buf + c->buflen, 0, 112 - c->buflen);
+	vn_memset(c->buf + c->buflen, 0, 112 - c->buflen);
 	store64_be(c->buf + 112, bits_hi);
 	store64_be(c->buf + 120, bits_lo);
 	sha512_compress(c->h, c->buf);
@@ -209,30 +209,30 @@ void wg_sha512_final(wg_sha512_ctx *c, uint8_t out[64])
 	for (i = 0; i < 8; ++i)
 		store64_be(out + i * 8, c->h[i]);
 
-	wg_memzero(c, sizeof(*c));
+	vn_memzero(c, sizeof(*c));
 }
 
-void wg_sha512(uint8_t out[64], const void *data, size_t len)
+void vn_sha512(uint8_t out[64], const void *data, size_t len)
 {
-	wg_sha512_ctx c;
-	wg_sha512_init(&c);
-	wg_sha512_update(&c, data, len);
-	wg_sha512_final(&c, out);
+	vn_sha512_ctx c;
+	vn_sha512_init(&c);
+	vn_sha512_update(&c, data, len);
+	vn_sha512_final(&c, out);
 }
 
-void wg_sha512_2(uint8_t out[64], const void *a, size_t alen,
+void vn_sha512_2(uint8_t out[64], const void *a, size_t alen,
                  const void *b, size_t blen)
 {
-	wg_sha512_ctx c;
-	wg_sha512_init(&c);
-	wg_sha512_update(&c, a, alen);
-	wg_sha512_update(&c, b, blen);
-	wg_sha512_final(&c, out);
+	vn_sha512_ctx c;
+	vn_sha512_init(&c);
+	vn_sha512_update(&c, a, alen);
+	vn_sha512_update(&c, b, blen);
+	vn_sha512_final(&c, out);
 }
 
 int crypto_hash_sha512_init(crypto_hash_sha512_state *s)
 {
-	wg_sha512_init(s);
+	vn_sha512_init(s);
 	return 0;
 }
 
@@ -240,20 +240,20 @@ int crypto_hash_sha512_update(crypto_hash_sha512_state *s,
                               const unsigned char *in,
                               unsigned long long inlen)
 {
-	wg_sha512_update(s, in, (size_t)inlen);
+	vn_sha512_update(s, in, (size_t)inlen);
 	return 0;
 }
 
 int crypto_hash_sha512_final(crypto_hash_sha512_state *s, unsigned char *out)
 {
-	wg_sha512_final(s, out);
+	vn_sha512_final(s, out);
 	return 0;
 }
 
 int crypto_hash_sha512(unsigned char *out, const unsigned char *in,
                        unsigned long long inlen)
 {
-	wg_sha512(out, in, (size_t)inlen);
+	vn_sha512(out, in, (size_t)inlen);
 	return 0;
 }
 
@@ -276,9 +276,9 @@ typedef struct {
 	uint8_t  block[64];
 	size_t   have;        /* bytes of `block` still unused */
 	uint64_t block_index;
-} wg_chacha_ctx;
+} vn_chacha_ctx;
 
-static void chacha20_block(wg_chacha_ctx *c)
+static void chacha20_block(vn_chacha_ctx *c)
 {
 	uint32_t x[16];
 	int i;
@@ -310,10 +310,10 @@ static void chacha20_block(wg_chacha_ctx *c)
 		c->input[13] += 1;   /* nonce words 13..15 are ours to carry into */
 
 	c->have = 64;
-	wg_memzero(x, sizeof(x));
+	vn_memzero(x, sizeof(x));
 }
 
-static void chacha20_init(wg_chacha_ctx *c, const uint8_t key[32],
+static void chacha20_init(vn_chacha_ctx *c, const uint8_t key[32],
                           const uint8_t nonce[12], uint32_t counter)
 {
 	static const char sigma[16] = "expand 32-byte k";
@@ -351,19 +351,19 @@ static void chacha20_init(wg_chacha_ctx *c, const uint8_t key[32],
  * a single (key, nonce) pair and gives forward secrecy between generations. */
 #define WG_DRBG_REKEY_BYTES ((uint64_t)1 << 20)
 
-static wg_chacha_ctx wg_drbg;
-static uint8_t       wg_drbg_key[32];
-static uint8_t       wg_drbg_nonce[12];
-static uint64_t      wg_drbg_since_rekey;
-static int           wg_drbg_ready;
+static vn_chacha_ctx vn_drbg;
+static uint8_t       vn_drbg_key[32];
+static uint8_t       vn_drbg_nonce[12];
+static uint64_t      vn_drbg_since_rekey;
+static int           vn_drbg_ready;
 
 static void drbg_start_generation(const uint8_t key[32],
                                   const uint8_t nonce[12])
 {
-	wg_memcpy(wg_drbg_key, key, 32);
-	wg_memcpy(wg_drbg_nonce, nonce, 12);
-	chacha20_init(&wg_drbg, wg_drbg_key, wg_drbg_nonce, 0);
-	wg_drbg_since_rekey = 0;
+	vn_memcpy(vn_drbg_key, key, 32);
+	vn_memcpy(vn_drbg_nonce, nonce, 12);
+	chacha20_init(&vn_drbg, vn_drbg_key, vn_drbg_nonce, 0);
+	vn_drbg_since_rekey = 0;
 }
 
 /* Fold `len` bytes of fresh entropy into the DRBG state and restart the
@@ -373,21 +373,21 @@ static void drbg_reseed(const uint8_t *extra, size_t extra_len)
 {
 	static const uint8_t label[24] = "wg-vanity onion drbg v1";
 	uint8_t h[64];
-	wg_sha512_ctx c;
+	vn_sha512_ctx c;
 
-	wg_sha512_init(&c);
-	wg_sha512_update(&c, label, sizeof(label));
-	wg_sha512_update(&c, wg_drbg_key, 32);
-	wg_sha512_update(&c, &wg_drbg_since_rekey, sizeof(wg_drbg_since_rekey));
+	vn_sha512_init(&c);
+	vn_sha512_update(&c, label, sizeof(label));
+	vn_sha512_update(&c, vn_drbg_key, 32);
+	vn_sha512_update(&c, &vn_drbg_since_rekey, sizeof(vn_drbg_since_rekey));
 	if (extra && extra_len)
-		wg_sha512_update(&c, extra, extra_len);
-	wg_sha512_final(&c, h);
+		vn_sha512_update(&c, extra, extra_len);
+	vn_sha512_final(&c, h);
 
 	drbg_start_generation(h, h + 32);
-	wg_memzero(h, sizeof(h));
+	vn_memzero(h, sizeof(h));
 }
 
-int wg_drbg_init(const unsigned char *seed, unsigned int seed_len)
+int vn_drbg_init(const unsigned char *seed, unsigned int seed_len)
 {
 	static const uint8_t label[24] = "wg-vanity onion drbg v1";
 	uint8_t h[64];
@@ -395,61 +395,61 @@ int wg_drbg_init(const unsigned char *seed, unsigned int seed_len)
 	if (!seed || seed_len < 32)
 		return -1;
 
-	wg_memzero(&wg_drbg, sizeof(wg_drbg));
-	wg_memzero(wg_drbg_key, sizeof(wg_drbg_key));
-	wg_memzero(wg_drbg_nonce, sizeof(wg_drbg_nonce));
-	wg_drbg_since_rekey = 0;
+	vn_memzero(&vn_drbg, sizeof(vn_drbg));
+	vn_memzero(vn_drbg_key, sizeof(vn_drbg_key));
+	vn_memzero(vn_drbg_nonce, sizeof(vn_drbg_nonce));
+	vn_drbg_since_rekey = 0;
 
-	wg_sha512_2(h, label, sizeof(label), seed, seed_len);
+	vn_sha512_2(h, label, sizeof(label), seed, seed_len);
 	drbg_start_generation(h, h + 32);
-	wg_memzero(h, sizeof(h));
+	vn_memzero(h, sizeof(h));
 
 	/* warm up: throw away the first block, then fold a fresh block back in */
 	{
 		uint8_t warm[64];
-		wg_drbg_bytes(warm, sizeof(warm));
+		vn_drbg_bytes(warm, sizeof(warm));
 		drbg_reseed(warm, sizeof(warm));
-		wg_memzero(warm, sizeof(warm));
+		vn_memzero(warm, sizeof(warm));
 	}
 
-	wg_drbg_ready = 1;
+	vn_drbg_ready = 1;
 	return 0;
 }
 
-int wg_drbg_is_ready(void)
+int vn_drbg_is_ready(void)
 {
-	return wg_drbg_ready;
+	return vn_drbg_ready;
 }
 
-void wg_drbg_bytes(void *out, size_t len)
+void vn_drbg_bytes(void *out, size_t len)
 {
 	uint8_t *p = (uint8_t *)out;
 
-	if (!wg_drbg_ready) {
-		/* Refuse to emit predictable bytes: caller forgot wg_onion_init.
+	if (!vn_drbg_ready) {
+		/* Refuse to emit predictable bytes: caller forgot vanity_init.
 		 * Zero-fill is the safest failure mode for a search that only
 		 * consumes these bytes as a search seed. */
-		wg_memset(out, 0, len);
+		vn_memset(out, 0, len);
 		return;
 	}
 
 	while (len) {
 		size_t take;
 
-		if (wg_drbg_since_rekey >= WG_DRBG_REKEY_BYTES)
+		if (vn_drbg_since_rekey >= WG_DRBG_REKEY_BYTES)
 			drbg_reseed(0, 0);
 
-		if (wg_drbg.have == 0)
-			chacha20_block(&wg_drbg);
+		if (vn_drbg.have == 0)
+			chacha20_block(&vn_drbg);
 
-		take = wg_drbg.have < len ? wg_drbg.have : len;
-		wg_memcpy(p, wg_drbg.block + (64 - wg_drbg.have), take);
-		wg_drbg.have -= take;
-		wg_drbg_since_rekey += take;
+		take = vn_drbg.have < len ? vn_drbg.have : len;
+		vn_memcpy(p, vn_drbg.block + (64 - vn_drbg.have), take);
+		vn_drbg.have -= take;
+		vn_drbg_since_rekey += take;
 		p += take;
 		len -= take;
 	}
 	/* Consume the current block fully before it can be handed out again. */
-	if (wg_drbg.have == 0)
-		wg_memzero(wg_drbg.block, sizeof(wg_drbg.block));
+	if (vn_drbg.have == 0)
+		vn_memzero(vn_drbg.block, sizeof(vn_drbg.block));
 }

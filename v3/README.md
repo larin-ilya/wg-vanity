@@ -1,8 +1,10 @@
 # WG Vanity v3 — GUI: WireGuard + красивые .onion v3-адреса
 
 Ищет **vanity-ключи WireGuard** И **красивые Tor .onion v3-адреса** в одном
-интерфейсе. Поиск — быстрый Python/NaCl воркер на всех ядрах CPU, интерфейс —
-Godot 3.6.3 (GLES2, работает на слабых видеокартах).
+интерфейсе. Оба вида поиска идут через нативный batch-движок (mkp224o
+`ed25519-donna`) на всех ядрах CPU — сотни миллионов ключей в секунду;
+чистый Python/NaCl остаётся как запасной путь. Интерфейс — Godot 3.6.3
+(GLES2, работает на слабых видеокартах).
 
 Скриншот интерфейса — в корневом [README](../README.md).
 
@@ -28,7 +30,10 @@ Godot 3.6.3 (GLES2, работает на слабых видеокартах).
 
 ## ✨ Возможности
 
-- Два режима поиска: WireGuard (ed25519) и **.onion v3** (адрес из ed25519-ключа).
+- Два режима поиска: WireGuard (Curve25519/X25519) и **.onion v3** (адрес из
+  ed25519-ключа).
+- Нативный движок для обоих режимов: batch-цикл из mkp224o (одна инверсия на
+  2048 точек) — 3.7 млн ключей/с на ядро, ~32 млн/с на 12 логических ядрах.
 - Один процессорный воркер на ядро — поиск использует весь CPU.
 - Живые метрики: проверено ключей/адресов, скорость, примерное время до успеха.
 - QR-код и конфиг клиента для WireGuard-ключа.
@@ -51,29 +56,35 @@ pip install pynacl pyinstaller
 ./build_worker.ps1        # соберёт gui/bundled/wg_worker.exe
 ```
 
-### 2. Нативный движок .onion-поиска (`core/onion_native/bin/wg_onion.dll`)
+### 2. Нативный движок поиска (`core/vanity_native/bin/vanity_core.dll`)
 
-Поиск .onion v3 идёт через нативный модуль, собранный из
-[mkp224o](https://github.com/cathugger/mkp224o) (batch-режим `ed25519-donna`).
+И поиск .onion v3, и поиск WireGuard-ключей идут через нативный модуль,
+собранный из [mkp224o](https://github.com/cathugger/mkp224o) (batch-режим
+`ed25519-donna`: одна обратная инверсия на 2048 точек). Для WireGuard внутри
+считается эдвардсова точка и переводится в Монтгомери-координату
+`u = (z + y) / (z - y)` — это ровно то, что кладёт в публичный ключ X25519.
 Готовая DLL **закоммичена** — пересобирать её нужно только если правите C-код
 или вендоринг. Нужен только `zig`, ставить ничего не надо:
 
 ```powershell
 python -m pip install ziglang          # если zig ещё нет
-./core/onion_native/build.ps1          # соберёт core/onion_native/bin/wg_onion.dll
+./core/vanity_native/build.ps1         # соберёт core/vanity_native/bin/vanity_core.dll
 ```
 
 Проверить движок:
 
 ```powershell
 cd core
-python test_onion_native.py            # 38 проверок, exit code 0 = всё хорошо
-python ../bench/bench_onion.py --engine native --seconds 10 --cores 12
+python test_vanity_native.py           # 103 проверки, exit code 0 = всё хорошо
+python ../bench/bench_native.py --kind wg    --engine native --seconds 10 --cores 12
+python ../bench/bench_native.py --kind onion --engine native --seconds 10 --cores 12
 ```
 
 Если DLL нет, воркер молча работает на прежнем Python-пути (PyNaCl).
-Принудительно выбрать движок: переменная окружения `WG_ONION_ENGINE`
-(`auto` по умолчанию, `native`, `python`).
+Принудительно выбрать движок: переменная окружения `WG_NATIVE_ENGINE`
+(`auto` по умолчанию, `native`, `python`) — общая для обоих видов поиска.
+Старое имя `WG_ONION_ENGINE` тоже понимается (только для .onion) и имеет
+меньший приоритет.
 
 ### 3. Иконка (многоразмерный .ico)
 
@@ -100,15 +111,15 @@ python core/make_icon.py  # соберёт gui/assets/icon.ico из icon.png (16
 ```
 v3/
 ├─ core/                    # Python: wg_worker.py (поиск wg+onion),
-│  │                        # onion_native.py (обёртка над нативной DLL),
-│  │                        # test_onion_native.py, gen_tracker_music.py, make_icon.py
-│  └─ onion_native/         # нативный onion-движок: C-код + вендоренный mkp224o
-│     ├─ wg_onion_bridge.c  #   batch-цикл поиска и публичный C ABI
-│     ├─ wg_onion_crypto.c  #   SHA-512 + ChaCha20-DRBG (без libc)
+│  │                        # vanity_native.py (обёртка над нативной DLL),
+│  │                        # test_vanity_native.py, gen_tracker_music.py, make_icon.py
+│  └─ vanity_native/        # нативный движок (onion v3 + wg): C-код + вендоренный mkp224o
+│     ├─ vanity_bridge.c    #   batch-цикл поиска обоих видов и публичный C ABI
+│     ├─ vanity_crypto.c    #   SHA-512 + ChaCha20-DRBG (без libc)
 │     ├─ vendor/            #   subset mkp224o (CC0), см. vendor/UPSTREAM.txt
 │     ├─ build.ps1          #   сборка через zig
-│     └─ bin/wg_onion.dll   #   готовая DLL (закоммичена)
-├─ bench/                   # замеры скорости: bench_onion.py + RESULTS.md
+│     └─ bin/vanity_core.dll#   готовая DLL (закоммичена)
+├─ bench/                   # замеры скорости: bench_native.py + RESULTS.md
 ├─ gui/
 │  ├─ scripts/              # Godot-скрипты интерфейса (Main.gd и др.)
 │  ├─ shaders/              # bg/ring/noise (цифровой шум)

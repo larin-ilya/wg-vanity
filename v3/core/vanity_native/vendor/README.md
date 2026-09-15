@@ -14,9 +14,9 @@ Why these files:
   `amd64-64-24k` cannot do batched inversion.
 - `keccak.c/.h` — SHA3-256 for the `.onion` checksum.
 - `base32_to.c/.h`, `base32_from` (in `base32_from.c` upstream, not vendored
-  here — the prefix→bitmask conversion is done by `wg_onion_bridge.c`) —
+  here — the prefix→bitmask conversion is done by `vanity_bridge.c`) —
   RFC 4648 base32 for the 56-character onion address.
 - `types.h`, `likely.h` — the tiny typedef/`likely()` helpers the above need.
 
 Nothing here is modified. All the new code (batch loop, filters, RNG, SHA-512,
-C ABI) lives one level up in `../wg_onion_bridge.c` and `../wg_onion_crypto.c`.
+C ABI) lives one level up in `../vanity_bridge.c` and `../vanity_crypto.c`.

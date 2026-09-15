@@ -6,8 +6,8 @@
  * definitions come from zig's compiler_rt (memcpy/memset/memmove/memcmp),
  * which the linker pulls in on demand.
  */
-#ifndef WG_ONION_SHIM_STRING_H
-#define WG_ONION_SHIM_STRING_H
+#ifndef VANITY_SHIM_STRING_H
+#define VANITY_SHIM_STRING_H
 
 #include <stddef.h>
 
@@ -16,4 +16,4 @@ void *memmove(void *dst, const void *src, size_t n);
 void *memset(void *dst, int c, size_t n);
 int memcmp(const void *a, const void *b, size_t n);
 
-#endif /* WG_ONION_SHIM_STRING_H */
+#endif /* VANITY_SHIM_STRING_H */

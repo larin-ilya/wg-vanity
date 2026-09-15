@@ -23,7 +23,7 @@ Deliberately NOT vendored (kept out to keep the native module minimal):
   vec.c, cpucount.c, base16*, base64*, calcest.c, test_*.c, ed25519/ref10,
   ed25519/amd64-51-30k, ed25519/amd64-64-24k
   -> the batch search loop from worker_batch.inc.h was re-implemented as
-     ../wg_onion_bridge.c; the non-donna backends are unused because only
+     ../vanity_bridge.c; the non-donna backends are unused because only
      ed25519-donna exposes ge25519_batchpack_destructive_1/_finish.
 
 ed25519/ed25519_impl_pre.h and ed25519_impl_post.h are pulled in as part of the

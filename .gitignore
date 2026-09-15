@@ -27,18 +27,18 @@ v3/export/
 v3/rcedit-x64.exe
 v3/export_log.txt
 
-# Нативный onion-движок: кэши zig (сборочный мусор build.ps1)
+# Нативный движок (onion v3 + WireGuard): кэши zig (сборочный мусор build.ps1)
 .zig-cache/
 .zig-global-cache/
 *.zig-cache/
 *.zig-global-cache/
-v3/core/onion_native/.zig-cache/
-v3/core/onion_native/.zig-global-cache/
-# ...а сам bin/wg_onion.dll, наоборот, КОММИТИТСЯ (на машинах сборки нет
-# компилятора, без него релиз не воспроизвести) — см. v3/core/onion_native/build.ps1
-v3/core/onion_native/bin/*.lib
-v3/core/onion_native/bin/*.pdb
-v3/core/onion_native/bin/*.exp
+v3/core/vanity_native/.zig-cache/
+v3/core/vanity_native/.zig-global-cache/
+# ...а сам bin/vanity_core.dll, наоборот, КОММИТИТСЯ (на машинах сборки нет
+# компилятора, без него релиз не воспроизвести) — см. v3/core/vanity_native/build.ps1
+v3/core/vanity_native/bin/*.lib
+v3/core/vanity_native/bin/*.pdb
+v3/core/vanity_native/bin/*.exp
 
 # Локальные черновики замеров
 v3/bench/*.json

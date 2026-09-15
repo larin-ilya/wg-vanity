@@ -5,8 +5,8 @@
  * compile. No allocation happens in this DLL at all - every buffer is a
  * static/global.
  */
-#ifndef WG_ONION_SHIM_STDLIB_H
-#define WG_ONION_SHIM_STDLIB_H
+#ifndef VANITY_SHIM_STDLIB_H
+#define VANITY_SHIM_STDLIB_H
 
 #include <stddef.h>
 
@@ -17,4 +17,4 @@ static inline int abs(int x)
 	return x < 0 ? -x : x;
 }
 
-#endif /* WG_ONION_SHIM_STDLIB_H */
+#endif /* VANITY_SHIM_STDLIB_H */

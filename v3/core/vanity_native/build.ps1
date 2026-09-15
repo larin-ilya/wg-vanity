@@ -1,6 +1,9 @@
-# build.ps1 - build bin\wg_onion.dll from the vendored mkp224o subset.
+# build.ps1 - build bin\vanity_core.dll from the vendored mkp224o subset.
 #
-# Run from anywhere:  powershell -ExecutionPolicy Bypass -File v3\core\onion_native\build.ps1
+# The DLL serves BOTH vanity searches: .onion v3 addresses (base32) and
+# WireGuard keys (base64), see vanity_bridge.c.
+#
+# Run from anywhere:  powershell -ExecutionPolicy Bypass -File v3\core\vanity_native\build.ps1
 #
 # Why zig and why no libc:
 #   There is no MSVC/gcc/mingw on the machines this project is built on. zig is
@@ -11,8 +14,8 @@
 #     - include\ holds minimal <string.h>/<stdlib.h>/<sys/param.h> stand-ins
 #     - include\sodium\ stands in for the two libsodium headers the vendored
 #       ed25519-donna glue includes
-#     - wg_onion_crypto.c supplies SHA-512, the ChaCha20 DRBG and memset
-#     - wg_onion_dllentry.c supplies _tls_index and _DllMainCRTStartup
+#     - vanity_crypto.c supplies SHA-512, the ChaCha20 DRBG and memset
+#     - vanity_dllentry.c supplies _tls_index and _DllMainCRTStartup
 #     - memcpy/memset/memmove/memcmp come from zig's compiler_rt
 #   Nothing here calls malloc/printf/exit, so no CRT is needed.
 
@@ -20,7 +23,7 @@ $ErrorActionPreference = "Stop"
 
 $root = $PSScriptRoot
 $bin  = Join-Path $root "bin"
-$dll  = Join-Path $bin "wg_onion.dll"
+$dll  = Join-Path $bin "vanity_core.dll"
 
 # ---------------------------------------------------------------- toolchain
 $py = $null
@@ -38,9 +41,9 @@ Write-Host "zig      : $zigver (via $py -m ziglang)"
 
 # ------------------------------------------------------------------- inputs
 $sources = @(
-    (Join-Path $root "wg_onion_bridge.c")
-    (Join-Path $root "wg_onion_crypto.c")
-    (Join-Path $root "wg_onion_dllentry.c")
+    (Join-Path $root "vanity_bridge.c")
+    (Join-Path $root "vanity_crypto.c")
+    (Join-Path $root "vanity_dllentry.c")
     (Join-Path $root "vendor\keccak.c")
     (Join-Path $root "vendor\base32_to.c")
 )
@@ -52,7 +55,7 @@ $includeDirs = @(
     (Join-Path $root "include")          # string.h / stdlib.h / sys/param.h / sodium/*
     (Join-Path $root "vendor")           # keccak.h / base32.h / types.h / likely.h
     (Join-Path $root "vendor\ed25519")   # ed25519_impl_pre.h + ed25519-donna/
-    $root                                # wg_onion_crypto.h
+    $root                                # vanity_crypto.h
 )
 
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
@@ -71,7 +74,7 @@ foreach ($inc in $includeDirs) { $zigArgs += @("-I", $inc) }
 $zigArgs += @(
     "--cache-dir", $cacheDir,
     "--global-cache-dir", $globalCacheDir,
-    "--name", "wg_onion",
+    "--name", "vanity_core",
     "-femit-bin=$dll"
 )
 
@@ -84,7 +87,7 @@ if ($LASTEXITCODE -ne 0) { throw "zig build-lib failed with exit code $LASTEXITC
 
 # zig also drops a .lib import library and a .pdb next to the DLL; we only ship
 # the DLL, so remove them to keep bin/ reproducible.
-foreach ($extra in @("wg_onion.lib", "wg_onion.pdb")) {
+foreach ($extra in @("vanity_core.lib", "vanity_core.pdb")) {
     $p = Join-Path $bin $extra
     if (Test-Path $p) { Remove-Item $p -Force }
 }

@@ -4,7 +4,7 @@
  * clang/zig, so that is us) to pick up BSD detection macros. We target
  * x86_64-windows-gnu, so nothing from it is needed.
  */
-#ifndef WG_ONION_SHIM_SYS_PARAM_H
-#define WG_ONION_SHIM_SYS_PARAM_H
+#ifndef VANITY_SHIM_SYS_PARAM_H
+#define VANITY_SHIM_SYS_PARAM_H
 
-#endif /* WG_ONION_SHIM_SYS_PARAM_H */
+#endif /* VANITY_SHIM_SYS_PARAM_H */
