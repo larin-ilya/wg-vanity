@@ -9,10 +9,18 @@ $here = Split-Path $PSScriptRoot               # каталог v2 (где ле�
 $exeOut = Join-Path $here "export\WG_Vanity_v2.exe"
 $guiPath = Join-Path $here "gui"
 
-$godot = Get-Command "godot" -ErrorAction SilentlyContinue
+# Поиск движка: $env:GODOT -> godot в PATH -> известные пути машин сборки.
+$godot = $null
+if ($env:GODOT -and (Test-Path $env:GODOT)) {
+    $godot = $env:GODOT
+}
 if (-not $godot) {
-    if (Test-Path "D:\Godot_v3.6.3\Godot_v3.6.3-stable_win64.exe") {
-        $godot = "D:\Godot_v3.6.3\Godot_v3.6.3-stable_win64.exe"
+    $godot = Get-Command "godot" -ErrorAction SilentlyContinue
+}
+if (-not $godot) {
+    foreach ($p in @("D:\AI_PROJEKTZ\Godot_v3.6.3-stable_win64.exe",
+                     "D:\Godot_v3.6.3\Godot_v3.6.3-stable_win64.exe")) {
+        if (Test-Path $p) { $godot = $p; break }
     }
 }
 if (-not $godot) { Write-Host "Godot не найден. Укажите путь в скрипте."; exit 1 }

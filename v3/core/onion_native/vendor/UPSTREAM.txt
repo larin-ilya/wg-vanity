@@ -1,0 +1,32 @@
+Vendored source provenance
+==========================
+
+Upstream project : mkp224o
+Upstream URL     : https://github.com/cathugger/mkp224o
+Upstream commit  : 5172c0fd71740ca0b11da8149a2575dcf331d7ab
+Commit date      : 2024-02-15 21:48:15 +0000
+License          : CC0 1.0 Universal (public domain dedication) - see COPYING.txt
+
+Files taken verbatim from the commit above (no local modifications):
+
+  ed25519/ed25519-donna/*            (vendored as vendor/ed25519/ed25519-donna/*)
+  ed25519/ed25519.h                  (vendor/ed25519/ed25519.h)
+  ed25519/ed25519_impl_pre.h         (vendor/ed25519/ed25519_impl_pre.h)
+  ed25519/ed25519_impl_post.h        (vendor/ed25519/ed25519_impl_post.h)
+  keccak.h, keccak.c
+  base32.h, base32_to.c
+  types.h, likely.h
+  COPYING.txt
+
+Deliberately NOT vendored (kept out to keep the native module minimal):
+  main.c, worker.c, worker_batch*.inc.h, filters_*.inc.h, ioutil.c, yaml.c,
+  vec.c, cpucount.c, base16*, base64*, calcest.c, test_*.c, ed25519/ref10,
+  ed25519/amd64-51-30k, ed25519/amd64-64-24k
+  -> the batch search loop from worker_batch.inc.h was re-implemented as
+     ../wg_onion_bridge.c; the non-donna backends are unused because only
+     ed25519-donna exposes ge25519_batchpack_destructive_1/_finish.
+
+ed25519/ed25519_impl_pre.h and ed25519_impl_post.h are pulled in as part of the
+ed25519 dispatch glue: the pre-header is what defines ed25519_seckey_expand(),
+ge_scalarmult_base(), ge_add() and ge_eightpoint for the donna backend. They are
+upstream files, unmodified.

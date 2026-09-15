@@ -6,17 +6,39 @@ $ErrorActionPreference = "Continue"
 # убьём зависшие процессы, если они держат файлы (экспорт иначе падает)
 Get-Process -Name "Godot_*","WG_Vanity*","wg_worker*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-$here = Split-Path $PSScriptRoot               # каталог v3 (где лежит скрипт)
+# Каталог v3 — тот, где лежат gui/project.godot и core/. Обычно это сам каталог
+# скрипта; если скрипт положили в подкаталог — родительский.
+$here = $PSScriptRoot
+if (-not (Test-Path (Join-Path $here "gui\project.godot"))) {
+    $here = Split-Path $PSScriptRoot
+}
+if (-not (Test-Path (Join-Path $here "gui\project.godot"))) {
+    Write-Host "не найден gui\project.godot — запускайте скрипт из каталога v3/"
+    exit 1
+}
 $exeOut = Join-Path $here "export\WG_Vanity_v3.exe"
 $guiPath = Join-Path $here "gui"
 $rcedit = Join-Path $here "rcedit-x64.exe"
-if (-not (Test-Path $rcedit)) { $rcedit = "D:\Godot_v3.6.3\rcedit-x64.exe" }
+if (-not (Test-Path $rcedit)) {
+    foreach ($p in @("D:\AI_PROJEKTZ\rcedit-x64.exe",
+                     "D:\Godot_v3.6.3\rcedit-x64.exe")) {
+        if (Test-Path $p) { $rcedit = $p; break }
+    }
+}
 $icon = Join-Path $here "gui\assets\icon.ico"
 
-$godot = Get-Command "godot" -ErrorAction SilentlyContinue
+# Поиск движка: $env:GODOT -> godot в PATH -> известные пути машин сборки.
+$godot = $null
+if ($env:GODOT -and (Test-Path $env:GODOT)) {
+    $godot = $env:GODOT
+}
 if (-not $godot) {
-    if (Test-Path "D:\Godot_v3.6.3\Godot_v3.6.3-stable_win64.exe") {
-        $godot = "D:\Godot_v3.6.3\Godot_v3.6.3-stable_win64.exe"
+    $godot = Get-Command "godot" -ErrorAction SilentlyContinue
+}
+if (-not $godot) {
+    foreach ($p in @("D:\AI_PROJEKTZ\Godot_v3.6.3-stable_win64.exe",
+                     "D:\Godot_v3.6.3\Godot_v3.6.3-stable_win64.exe")) {
+        if (Test-Path $p) { $godot = $p; break }
     }
 }
 if (-not $godot) { Write-Host "Godot не найден. Укажите путь в скрипте."; exit 1 }
@@ -27,7 +49,7 @@ Remove-Item $exeOut -ErrorAction SilentlyContinue
 Write-Host "export exitcode=$LASTEXITCODE"
 
 # Godot 3.6 НЕ вшивает иконку в exe сам — нужен внешний rcedit
-if (Test-Path $exeOut -and (Test-Path $rcedit) -and (Test-Path $icon)) {
+if ((Test-Path $exeOut) -and (Test-Path $rcedit) -and (Test-Path $icon)) {
     & $rcedit $exeOut --set-icon $icon `
         --set-file-version "3.0.0" `
         --set-product-version "3.0.0" `

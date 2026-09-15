@@ -56,6 +56,16 @@ import time
 import traceback
 from datetime import datetime
 
+# Воркер импортирует соседний модуль onion_native.py. В обычном Python каталог
+# запущенного скрипта и так лежит в sys.path[0], но у embeddable-сборок
+# (python313.zip + ._pth, как у комплектного AutoClaw-Python) sys.path задаётся
+# файлом, и каталога скрипта там нет — добавляем его сами. Безопасно и для
+# PyInstaller (там это _MEIPASS).
+_HERE = (os.path.dirname(os.path.abspath(__file__))
+         if "__file__" in globals() else None)
+if _HERE and _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 try:
     import nacl.bindings
     import nacl.signing
@@ -63,6 +73,15 @@ try:
     HAVE_NACL = True
 except Exception:  # pragma: no cover
     HAVE_NACL = False
+
+# Нативный движок onion-поиска (собранный из mkp224o ed25519-donna).
+# Если DLL нет/не грузится — спокойно живём на чистом Python.
+try:
+    import onion_native
+    ONION_NATIVE_IMPORT_ERROR = None
+except Exception as _e:  # pragma: no cover
+    onion_native = None
+    ONION_NATIVE_IMPORT_ERROR = "%s: %s" % (type(_e).__name__, _e)
 
 # --------------------------------------------------------------------------
 # ДОПУСТИМЫЕ ЗАМЕНЫ СИМВОЛОВ (leet-режим) — как в v1
@@ -95,6 +114,16 @@ ONION_CHARSET = set(ONION_CHARS)
 ONION_CHECKSUM_PREFIX = b".onion checksum"
 ONION_VERSION_BYTE = b"\x03"
 
+# Магические префиксы файлов ключей Tor (как в mkp224o: строка + 3 NUL-байта,
+# итого 32 байта). Tor без них файл ключа не примет.
+ONION_SECRET_MAGIC = b"== ed25519v1-secret: type0 ==" + b"\x00\x00\x00"
+ONION_PUBLIC_MAGIC = b"== ed25519v1-public: type0 ==" + b"\x00\x00\x00"
+assert len(ONION_SECRET_MAGIC) == 32 and len(ONION_PUBLIC_MAGIC) == 32
+
+# Сколько ключей просим у нативного движка за один вызов. Меньше — отзывчивее
+# stop/найденный-другой-воркер, больше — меньше накладных расходов на вызов.
+ONION_NATIVE_CHUNK = 262144
+
 # Подстановки для onion (только в рамках алфавита base32).
 # "0"->"o", "1"->"l"/"i", "8"->"b", "9"->"g" НЕЛЬЗЯ: таких символов в
 # алфавите нет, поэтому заменяем «похожие» на доступные буквы.
@@ -116,6 +145,18 @@ def onion_address_from_pub(pub: bytes) -> str:
     raw = pub + checksum + ONION_VERSION_BYTE          # 35 байт
     b32 = base64.b32encode(raw).decode("ascii")        # 56 символов A-Z2-7
     return b32.lower()
+
+
+def onion_expanded_secret(seed: bytes) -> bytes:
+    """64-байтный РАСШИРЕННЫЙ ed25519-секрет из 32-байтного seed.
+
+    Это sha512(seed) с клампом — ровно то, что mkp224o/Tor кладут в
+    hs_ed25519_secret_key (а не сам seed)."""
+    h = bytearray(hashlib.sha512(seed).digest())
+    h[0] &= 248
+    h[31] &= 127
+    h[31] |= 64
+    return bytes(h)
 
 
 def generate_onion_prefixes(word: str, strict: bool):
@@ -200,8 +241,34 @@ def search_worker(worker_id, groups, first_bytes, stop_event, found_event,
 
 def search_worker_onion(worker_id, groups, first_bytes, stop_event,
                         found_event, counter, result_queue):
-    """Ищет onion v3: крутит ed25519-пары, считает 56-символьный адрес
-    и проверяет префикс по алфавиту a-z2-7 (как mkp224o)."""
+    """Ищет onion v3. Движок выбирается автоматически:
+
+      * native — модуль onion_native (mkp224o ed25519-donna, batch-режим);
+      * python — прежний чистый Python + PyNaCl (fallback).
+
+    Переключатель: WG_ONION_ENGINE=python|native|auto (по умолчанию auto).
+    Процесс остаётся однопоточным; параллелизм — через multiprocessing."""
+    try:
+        engine = onion_engine_for(groups)
+    except Exception as e:
+        try:
+            result_queue.put({"error": "search_worker_onion: %s" % e})
+        except Exception:
+            pass
+        return
+    if engine == "native":
+        _search_worker_onion_native(worker_id, groups, stop_event,
+                                    found_event, counter, result_queue)
+    else:
+        _search_worker_onion_python(worker_id, groups, first_bytes,
+                                    stop_event, found_event, counter,
+                                    result_queue)
+
+
+def _search_worker_onion_python(worker_id, groups, first_bytes, stop_event,
+                                found_event, counter, result_queue):
+    """Чистый Python: seed = random(32) -> SigningKey -> pubkey -> адрес.
+    В десятки-сотни раз медленнее нативного пути, но работает без DLL."""
     keys_checked = 0
     try:
         firsts = set(first_bytes)
@@ -228,6 +295,7 @@ def search_worker_onion(worker_id, groups, first_bytes, stop_event,
                                 "prefix": prefix.decode("ascii"),
                                 "worker_id": worker_id,
                                 "keys_checked": keys_checked,
+                                "engine": "python",
                                 "timestamp": datetime.now().isoformat(
                                     timespec="seconds"),
                             })
@@ -240,6 +308,105 @@ def search_worker_onion(worker_id, groups, first_bytes, stop_event,
     finally:
         with counter.get_lock():
             counter.value += keys_checked % 1000
+
+
+def all_onion_prefixes(groups):
+    """Плоский список префиксов (bytes) из сгруппированного словаря."""
+    out = set()
+    for lst in groups.values():
+        out.update(lst)
+    return sorted(out)
+
+
+def onion_engine_for(groups):
+    """Выбирает движок onion-поиска: 'native' или 'python'.
+
+    native берём, только если DLL доступна И набор префиксов ей подходит
+    (алфавит a-z2-7, длина 1..12 — столько принимает обёртка).  При
+    WG_ONION_ENGINE=native любая из этих причин — громкая ошибка, а не повод
+    молча замедлиться; в режиме auto — тихий откат на Python."""
+    if onion_native is None:
+        if os.environ.get("WG_ONION_ENGINE", "").strip().lower() == "native":
+            raise RuntimeError(
+                "WG_ONION_ENGINE=native, но модуль onion_native не "
+                "импортируется: %s" % ONION_NATIVE_IMPORT_ERROR)
+        return "python"
+    mode = onion_native.engine_mode()
+    if mode == "python":
+        return "python"
+
+    prefixes = [p.decode("ascii") for p in all_onion_prefixes(groups)]
+    try:
+        onion_native.OnionNativeEngine.normalize_prefixes(prefixes)
+        prefix_err = None
+    except Exception as e:
+        prefix_err = str(e)
+    available = onion_native.is_available()
+
+    if prefix_err is None and available:
+        return "native"
+    if mode == "native":
+        if prefix_err is not None:
+            raise RuntimeError(
+                "WG_ONION_ENGINE=native, но набор префиксов не подходит "
+                "нативному движку: %s" % prefix_err)
+        raise RuntimeError(
+            "WG_ONION_ENGINE=native, но нативный движок недоступен: %s"
+            % onion_native.unavailable_reason())
+    return "python"
+
+
+def _match_prefix(prefixes, onion):
+    """Какой из префиксов (bytes) сработал — самый длинный."""
+    best = None
+    for p in prefixes:
+        s = p.decode("ascii")
+        if onion.startswith(s) and (best is None or len(s) > len(best)):
+            best = s
+    return best if best is not None else onion[:1]
+
+
+def _search_worker_onion_native(worker_id, groups, stop_event, found_event,
+                                counter, result_queue):
+    """Нативный поиск: чанками по ONION_NATIVE_CHUNK ключей.
+
+    Между чанками проверяем stop_event/found_event — процесс остаётся
+    однопоточным, чанк на этой машине это ~0.1 с."""
+    keys_checked = 0
+    try:
+        prefixes = all_onion_prefixes(groups)
+        engine = onion_native.get_engine()
+        engine.configure([p.decode("ascii") for p in prefixes])
+        while not stop_event.is_set() and not found_event.is_set():
+            code, checked, found = engine.search(ONION_NATIVE_CHUNK)
+            keys_checked += checked
+            if checked:
+                with counter.get_lock():
+                    counter.value += checked
+            if found is None:
+                if checked == 0:
+                    break        # защита от холостого цикла
+                continue
+            if not found_event.is_set():
+                found_event.set()
+                result_queue.put({
+                    "seed_b64": base64.b64encode(found["seed"]).decode(),
+                    "secret_b64": base64.b64encode(found["secret"]).decode(),
+                    "public_key_b64": base64.b64encode(found["pub"]).decode(),
+                    "onion": found["onion"],
+                    "prefix": _match_prefix(prefixes, found["onion"]),
+                    "worker_id": worker_id,
+                    "keys_checked": keys_checked,
+                    "engine": "native",
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                })
+            return
+    except Exception as e:  # pragma: no cover
+        try:
+            result_queue.put({
+                "error": "search_worker_onion (native): %s" % e})
+        except Exception:
+            pass
 
 
 # --------------------------------------------------------------------------
@@ -426,20 +593,29 @@ def save_onion_results(result, word, strict, out_dir):
     except Exception:
         pass
 
-    # 2) hs_ed25519_public_key (raw 32 байта)
+    # 2) hs_ed25519_public_key = магия(32) || pubkey(32)
     pub = base64.b64decode(result["public_key_b64"])
     try:
         with open(os.path.join(svc_dir, "hs_ed25519_public_key"), "wb") as f:
-            f.write(pub)
+            f.write(ONION_PUBLIC_MAGIC + pub)
         created.append(os.path.join(onion_domain, "hs_ed25519_public_key"))
     except Exception:
         pass
 
-    # 3) hs_ed25519_secret_key — seed[32] || pub[32] (64 байта)
+    # 3) hs_ed25519_secret_key = магия(32) || РАСШИРЕННЫЙ секрет(64)
+    #    Раньше здесь писался seed||pub без магии — Tor такой файл не принимает.
+    #    Нативный движок отдаёт расширенный секрет напрямую (secret_b64),
+    #    для python-пути считаем его из seed — форматы совпадают.
     seed = base64.b64decode(result["seed_b64"])
+    secret_b64 = result.get("secret_b64")
+    if secret_b64:
+        secret = base64.b64decode(secret_b64)
+    else:
+        secret = onion_expanded_secret(seed)
+    assert len(secret) == 64, len(secret)
     try:
         with open(os.path.join(svc_dir, "hs_ed25519_secret_key"), "wb") as f:
-            f.write(seed + pub)
+            f.write(ONION_SECRET_MAGIC + secret)
         created.append(os.path.join(onion_domain, "hs_ed25519_secret_key"))
     except Exception:
         pass
@@ -454,8 +630,10 @@ def save_onion_results(result, word, strict, out_dir):
             f.write("Префикс: %s\n" % result["prefix"])
             f.write("Дата: %s\n" % datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             f.write("Режим: %s\n" % ("СТРОГИЙ" if strict else "ОБЫЧНЫЙ"))
+            f.write("Движок: %s\n" % result.get("engine", "python"))
             f.write("=" * 70 + "\n")
-            f.write("seed (base64, 32 байта):\n%s\n\n" % result["seed_b64"])
+            f.write("seed (base64, 32 байта) — из него выведен секрет:\n%s\n\n"
+                    % result["seed_b64"])
             f.write("публичный ключ (base64, 32 байта):\n%s\n\n"
                     % result["public_key_b64"])
             f.write("Как использовать:\n")
@@ -482,8 +660,9 @@ def save_onion_results(result, word, strict, out_dir):
             f.write("Режим: %s\n" % ("СТРОГИЙ" if strict else "ОБЫЧНЫЙ"))
             f.write("Адрес: %s\n" % onion_domain)
             f.write("Папка ключей: %s\n" % os.path.abspath(svc_dir))
-            f.write("Процесс: %s | Проверено: %s\n"
-                    % (result.get("worker_id"), result.get("keys_checked")))
+            f.write("Процесс: %s | Проверено: %s | Движок: %s\n"
+                    % (result.get("worker_id"), result.get("keys_checked"),
+                       result.get("engine", "python")))
             f.write("-" * 80 + "\n\n")
         created.append(log_name)
     except Exception:
@@ -517,16 +696,27 @@ class SearchSession:
         self.prefix_count = 0
 
     def start(self):
+        engine = None
+        engine_note = None
         if self.kind == "onion":
             prefixes, self.substitutions = generate_onion_prefixes(
                 self.word, self.strict)
             target = search_worker_onion
+            self.groups = build_groups(prefixes)
+            try:
+                engine = onion_engine_for(self.groups)
+            except Exception as e:
+                # явно запросили native, а его нет — сообщаем причину и не
+                # притворяемся, что всё хорошо
+                engine = "python"
+                engine_note = str(e)
+                traceback.print_exc()
         else:
             prefixes, self.substitutions = generate_prefixes(
                 self.word, self.strict)
             target = search_worker
+            self.groups = build_groups(prefixes)
         self.prefix_count = len(prefixes)
-        self.groups = build_groups(prefixes)
         self.first_bytes = list(self.groups.keys())
         for i in range(self.workers):
             p = mp.Process(target=target,
@@ -541,6 +731,8 @@ class SearchSession:
             "prefix_count": self.prefix_count,
             "substitutions": self.substitutions,
             "workers": self.workers,
+            "engine": engine or "python",
+            "engine_note": engine_note,
         }
 
     def stop(self):
@@ -695,6 +887,7 @@ class WorkerServer:
                    "kind": sess.kind, "strict": sess.strict,
                    "workers": sess.workers,
                    "prefix_count": meta["prefix_count"],
+                   "engine": meta.get("engine", "python"),
                    "substitutions": meta["substitutions"]})
         self._stats_thread = threading.Thread(target=self._stats_loop,
                                               daemon=True)
@@ -749,7 +942,9 @@ class WorkerServer:
             except Exception as e:
                 traceback.print_exc()
         if sess.kind == "onion":
-            self.send({
+            # ключи сообщения не меняем (GUI их читает), только добавляем
+            # secret_b64/engine/keys_checked/timestamp
+            msg = {
                 "type": "found", "search_id": sess.search_id, "kind": "onion",
                 "prefix": res["prefix"], "onion": res["onion"],
                 "seed_b64": res["seed_b64"],
@@ -757,7 +952,13 @@ class WorkerServer:
                 "checked": checked, "elapsed": round(elapsed, 2),
                 "worker_id": res["worker_id"], "files": files,
                 "qr_png_b64": None,
-            })
+                "keys_checked": res.get("keys_checked"),
+                "timestamp": res.get("timestamp"),
+                "engine": res.get("engine", "python"),
+            }
+            if res.get("secret_b64"):
+                msg["secret_b64"] = res["secret_b64"]
+            self.send(msg)
         else:
             self.send({
                 "type": "found", "search_id": sess.search_id, "kind": "wg",

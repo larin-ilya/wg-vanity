@@ -51,13 +51,37 @@ pip install pynacl pyinstaller
 ./build_worker.ps1        # соберёт gui/bundled/wg_worker.exe
 ```
 
-### 2. Иконка (многоразмерный .ico)
+### 2. Нативный движок .onion-поиска (`core/onion_native/bin/wg_onion.dll`)
+
+Поиск .onion v3 идёт через нативный модуль, собранный из
+[mkp224o](https://github.com/cathugger/mkp224o) (batch-режим `ed25519-donna`).
+Готовая DLL **закоммичена** — пересобирать её нужно только если правите C-код
+или вендоринг. Нужен только `zig`, ставить ничего не надо:
+
+```powershell
+python -m pip install ziglang          # если zig ещё нет
+./core/onion_native/build.ps1          # соберёт core/onion_native/bin/wg_onion.dll
+```
+
+Проверить движок:
+
+```powershell
+cd core
+python test_onion_native.py            # 38 проверок, exit code 0 = всё хорошо
+python ../bench/bench_onion.py --engine native --seconds 10 --cores 12
+```
+
+Если DLL нет, воркер молча работает на прежнем Python-пути (PyNaCl).
+Принудительно выбрать движок: переменная окружения `WG_ONION_ENGINE`
+(`auto` по умолчанию, `native`, `python`).
+
+### 3. Иконка (многоразмерный .ico)
 
 ```powershell
 python core/make_icon.py  # соберёт gui/assets/icon.ico из icon.png (16–256 px)
 ```
 
-### 3. Экспорт Godot (Windows)
+### 4. Экспорт Godot (Windows)
 
 - Установите **Godot 3.6.3** + export templates для Windows, положите
   `rcedit-x64.exe` рядом (в каталог v3/).
@@ -76,7 +100,15 @@ python core/make_icon.py  # соберёт gui/assets/icon.ico из icon.png (16
 ```
 v3/
 ├─ core/                    # Python: wg_worker.py (поиск wg+onion),
-│                           # gen_tracker_music.py, make_icon.py
+│  │                        # onion_native.py (обёртка над нативной DLL),
+│  │                        # test_onion_native.py, gen_tracker_music.py, make_icon.py
+│  └─ onion_native/         # нативный onion-движок: C-код + вендоренный mkp224o
+│     ├─ wg_onion_bridge.c  #   batch-цикл поиска и публичный C ABI
+│     ├─ wg_onion_crypto.c  #   SHA-512 + ChaCha20-DRBG (без libc)
+│     ├─ vendor/            #   subset mkp224o (CC0), см. vendor/UPSTREAM.txt
+│     ├─ build.ps1          #   сборка через zig
+│     └─ bin/wg_onion.dll   #   готовая DLL (закоммичена)
+├─ bench/                   # замеры скорости: bench_onion.py + RESULTS.md
 ├─ gui/
 │  ├─ scripts/              # Godot-скрипты интерфейса (Main.gd и др.)
 │  ├─ shaders/              # bg/ring/noise (цифровой шум)

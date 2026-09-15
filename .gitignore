@@ -1,6 +1,8 @@
 # Godot cache (генерируется при импорте/экспорте)
 .godot/
 .godot/**
+# Godot 3 кэширует импорт в .import/ (в Godot 4 это .godot/)
+.import/
 
 # Python
 __pycache__/
@@ -23,6 +25,24 @@ v3/wg_worker.exe
 v3/WG_Vanity_v3.exe
 v3/export/
 v3/rcedit-x64.exe
+v3/export_log.txt
+
+# Нативный onion-движок: кэши zig (сборочный мусор build.ps1)
+.zig-cache/
+.zig-global-cache/
+*.zig-cache/
+*.zig-global-cache/
+v3/core/onion_native/.zig-cache/
+v3/core/onion_native/.zig-global-cache/
+# ...а сам bin/wg_onion.dll, наоборот, КОММИТИТСЯ (на машинах сборки нет
+# компилятора, без него релиз не воспроизвести) — см. v3/core/onion_native/build.ps1
+v3/core/onion_native/bin/*.lib
+v3/core/onion_native/bin/*.pdb
+v3/core/onion_native/bin/*.exp
+
+# Локальные черновики замеров
+v3/bench/*.json
+v3/bench/*.log
 
 # Secrets & локальные результаты (не коммитим)
 wg_keys_log.txt
