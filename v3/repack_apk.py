@@ -3,16 +3,15 @@
 """Постобработка Android-APK для wg-vanity.
 
 Что делает:
- 1) переносит GDNative-библиотеки из assets/android/<abi>/ в lib/<abi>/ APK
-    (иначе Android не найдёт их при dlopen; на Android 10+ распаковка .so
-    из assets не работает), десктопные копии выбрасывает;
- 2) правит android:screenOrientation в бинарном AndroidManifest.xml
-    (при экспорте без gradle Godot заливает pck в готовый шаблон APK, поэтому
-    настройка проекта display/window/handheld/orientation в манифест не попадает);
+ 1) переносит GDNative-библиотеки из assets/android/<abi>/ в lib/<abi>/ APK;
+ 2) правит бинарный AndroidManifest.xml:
+      * android:screenOrientation -> portrait (запрещаем поворот в landscape;
+        sensorPortrait на части устройств/оболочек ведёт себя непредсказуемо,
+        а Godot в рантайме ориентацию не меняет — только манифест);
+      * android:resizeableActivity -> false (окончный fullscreen-режим игры);
+    (при экспорте без gradle Godot заливает данные в готовый шаблон APK,
+    поэтому настройка проекта в манифест не попадает);
  3) выравнивает (zipalign) и подписывает debug-ключом (apksigner).
-
-Запуск (обычно вызывается из do_export_android.ps1):
-    python v3/repack_apk.py [--apk path] [--sdk path] [--jdk path] [--keystore path]
 """
 import argparse
 import os
@@ -26,7 +25,8 @@ ABIS = ("arm64-v8a", "armeabi-v7a")
 
 CHUNK_STRING_POOL = 0x0001
 CHUNK_START_ELEMENT = 0x0102
-TYPE_INT_DEC = 0x10
+TYPE_INT_DEC = 0x10      # целое
+TYPE_INT_BOOLEAN = 0x12  # true/false
 ORIENT = {"portrait": 1, "landscape": 0, "sensorPortrait": 7,
           "sensorLandscape": 6, "userPortrait": 12}
 
@@ -61,13 +61,8 @@ def pool_strings(buf: bytes) -> dict:
     return out
 
 
-def patch_manifest(data: bytes, value: int) -> bytes:
-    buf = bytearray(data)
-    idx = [i for i, s in pool_strings(bytes(buf)).items() if s == "screenOrientation"]
-    if not idx:
-        raise SystemExit("screenOrientation нет в пуле строк манифеста")
-    idx = idx[0]
-    patched = 0
+def _iter_attr_positions(buf: bytearray):
+    """Все позиции атрибутов (a) во всех START_ELEMENT-чанках."""
     off = 8
     while off + 8 <= len(buf):
         ctype, _hsize, csize = struct.unpack_from("<HHI", buf, off)
@@ -82,11 +77,28 @@ def patch_manifest(data: bytes, value: int) -> bytes:
                 a = aoff + i * (attr_size or 20)
                 if a + 20 > len(buf):
                     break
-                if struct.unpack_from("<I", buf, a + 4)[0] == idx and buf[a + 15] == TYPE_INT_DEC:
-                    struct.pack_into("<I", buf, a + 16, value)
-                    patched += 1
+                yield a
         off += csize
-    if not patched:
+
+
+def patch_manifest(data: bytes, orientation: int, resizeable: bool) -> bytes:
+    buf = bytearray(data)
+    strings = pool_strings(bytes(buf))
+    wanted = {}
+    oi = [i for i, s in strings.items() if s == "screenOrientation"]
+    ri = [i for i, s in strings.items() if s == "resizeableActivity"]
+    if oi:
+        wanted[oi[0]] = orientation
+    if ri:
+        wanted[ri[0]] = 1 if resizeable else 0
+    patched = {}
+    for a in _iter_attr_positions(buf):
+        name = struct.unpack_from("<I", buf, a + 4)[0]
+        dtype = buf[a + 15]
+        if name in wanted and dtype in (TYPE_INT_DEC, TYPE_INT_BOOLEAN):
+            struct.pack_into("<I", buf, a + 16, wanted[name])
+            patched[name] = True
+    if oi and oi[0] not in patched:
         raise SystemExit("атрибут screenOrientation не найден")
     return bytes(buf)
 
@@ -105,7 +117,8 @@ def main() -> int:
     ap.add_argument("--keystore", default=os.environ.get("WG_VANITY_ANDROID_DIR", r"D:\AI_PROJEKTZ\Android") + r"\debug.keystore")
     ap.add_argument("--alias", default="androiddebugkey")
     ap.add_argument("--ks-pass", default="android")
-    ap.add_argument("--orientation", default="sensorPortrait", choices=list(ORIENT))
+    ap.add_argument("--orientation", default="portrait", choices=list(ORIENT))
+    ap.add_argument("--resizeable", default="false", choices=["true", "false"])
     ap.add_argument("--work", default=None)
     a = ap.parse_args()
 
@@ -125,7 +138,6 @@ def main() -> int:
     print("входной APK:", apk, os.path.getsize(apk), "байт")
     src = zipfile.ZipFile(apk)
     libbytes = {}
-    manifest = None
     with zipfile.ZipFile(unsigned, "w", zipfile.ZIP_DEFLATED) as out:
         for item in src.infolist():
             n = item.filename
@@ -138,8 +150,7 @@ def main() -> int:
                     libbytes[abi] = src.read(n)
             data = src.read(n)
             if n == "AndroidManifest.xml":
-                manifest = patch_manifest(data, ORIENT[a.orientation])
-                data = manifest
+                data = patch_manifest(data, ORIENT[a.orientation], a.resizeable == "true")
             out.writestr(item, data)
         for abi in ABIS:
             if abi in libbytes:
@@ -149,7 +160,8 @@ def main() -> int:
     if len(libbytes) != 2:
         print("ОШИБКА: не найдены обе ABI-библиотеки в assets/android/<abi>/")
         return 1
-    print("  -> манифест: screenOrientation = %s (%d)" % (a.orientation, ORIENT[a.orientation]))
+    print("  -> манифест: screenOrientation = %s (%d), resizeableActivity = %s"
+          % (a.orientation, ORIENT[a.orientation], a.resizeable))
 
     env = dict(os.environ, JAVA_HOME=a.jdk)
     btdir = os.path.join(a.sdk, "build-tools")
@@ -171,9 +183,11 @@ def main() -> int:
         print("apksigner verify провалился:", out[:300]); return 1
     print("подпись:", out.strip().splitlines()[0] if out.strip() else "ok")
     rc, out = run([os.path.join(bt, "aapt.exe"), "dump", "xmltree", signed, "AndroidManifest.xml"], env)
-    line = [l for l in out.splitlines() if "screenOrientation" in l]
-    print("проверка ориентации:", line[0].strip() if line else "(не найдено)")
-    if not line or ("0x%x" % ORIENT[a.orientation]) not in line[0]:
+    lines = [l for l in out.splitlines() if "screenOrientation" in l or "resizeableActivity" in l]
+    for l in lines:
+        print("проверка:", l.strip())
+    ok_orient = any(("0x%x" % ORIENT[a.orientation]) in l for l in lines if "screenOrientation" in l)
+    if not ok_orient:
         print("ориентация не применилась"); return 1
 
     shutil.copy2(signed, apk)
